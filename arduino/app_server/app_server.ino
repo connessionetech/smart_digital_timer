@@ -47,9 +47,9 @@ void setupWebServer()
 {
   server.on ( "/", handleRoot );
   server.on ( "/alarms/get", getAlarms );
-  server.on ( "/alarms/set", setAlarms );
+  server.on ( "/alarms/set", HTTP_POST, setAlarms );
   server.on ( "/time/get", getClockTime );
-  server.on ( "/time/set", setClockTime );
+  server.on ( "/time/set", HTTP_POST, setClockTime );
   server.on ( "/", handleRoot );
   server.onNotFound ( handleNotFound );
   
@@ -102,10 +102,22 @@ void setAlarms()
   
 }
 
-
 void setClockTime()
-{
-  
+{  
+  if (server.hasArg("plain")== false){
+      StaticJsonBuffer<200> jsonBuffer;
+      JsonObject& root = jsonBuffer.parseObject(server.arg("plain"));
+      int yy = root["yy"];
+      int mm = root["mm"];
+      int dd = root["dd"];
+      int h = root["h"];
+      int i = root["m"];
+      int s = root["s"];
+    
+      //RtcDateTime(uint16_t year, uint8_t month, uint8_t dayOfMonth, uint8_t hour, uint8_t minute, uint8_t second)
+      RtcDateTime currentTime = RtcDateTime(yy,mm,dd,h,i,s); //define date and time object
+      Rtc.SetDateTime(currentTime);
+  }  
 }
 
 void setupRTC()
