@@ -45,6 +45,9 @@ void setup() {
   setupWebServer();
 }
 
+/**
+ * Generate unique client ID
+ */
 void setupClientId()
 {
   uint32_t chipid=ESP.getChipId();
@@ -52,7 +55,9 @@ void setupClientId()
   ssid = clientid;
 }
 
-
+/**
+ * Initialize access point
+ */
 void setupAP()
 {
   //set-up the custom IP address
@@ -66,7 +71,9 @@ void setupAP()
   Serial.println(myIP);
 }
 
-
+/**
+ * Setup webserver
+ */
 void setupWebServer()
 {
   server.on ( "/", handleRoot );
@@ -85,33 +92,47 @@ void setupWebServer()
   Serial.println("HTTP server started");
 }
 
+/**
+ * Handles root request
+ */
 void handleRoot()
 {
   server.send(200, "text/plain", "hello"); 
 }
 
+/**
+ * Handles 404 requests
+ */
 void handleNotFound()
 {
   server.send(404, "text/plain", "Not found"); 
 }
 
+/**
+ * Read state of switch A
+ */
 void readSwitchA()
 {
-  StaticJsonBuffer<100> jsonBuffer;
-  RtcDateTime now = Rtc.GetDateTime();
-  JsonObject& root = jsonBuffer.createObject();
-  root["id"] = conf.relay_1_id;
-  root["state"] = conf.relay_1;
-  root["lastupdate"] = conf.relay_1_lastupdate;
-
   String data;
-  root.printTo(data);
+  
+  StaticJsonBuffer<100> responseBuffer;
+  RtcDateTime now = Rtc.GetDateTime();
+  JsonObject& response = responseBuffer.createObject();
+  response["id"] = conf.relay_1_id;
+  response["state"] = conf.relay_1;
+  response["lastupdate"] = conf.relay_1_lastupdate;
+  response.printTo(data);
 
   server.send(200, "application/json", data); 
 }
 
+/**
+ * Toggle state of switch A
+ */
 void toggleSwitchA()
 {
+  String data;
+  
   if(conf.relay_1 == 0)
   {
     conf.relay_1=1;
@@ -123,20 +144,20 @@ void toggleSwitchA()
     //digitalWrite(RELAY1, HIGH);
   }
 
-  StaticJsonBuffer<100> jsonBuffer;
+  StaticJsonBuffer<100> responseBuffer;
   RtcDateTime now = Rtc.GetDateTime();
-  JsonObject& root = jsonBuffer.createObject();
-  root["id"] = conf.relay_1_id;
-  root["state"] = conf.relay_1;
-  root["lastupdate"] = conf.relay_1_lastupdate;
-
-  String data;
-  root.printTo(data);
-
+  JsonObject& response = responseBuffer.createObject();
+  response["id"] = conf.relay_1_id;
+  response["state"] = conf.relay_1;
+  response["lastupdate"] = conf.relay_1_lastupdate;
+  response.printTo(data);
+  
   server.send(200, "application/json", data);
 }
 
-
+/**
+ * Read state of switch B
+ */
 void readSwitchB()
 {
   StaticJsonBuffer<100> jsonBuffer;
@@ -152,6 +173,9 @@ void readSwitchB()
   server.send(200, "application/json", data); 
 }
 
+/**
+ * Toggle state of switch B
+ */
 void toggleSwitchB()
 {
   if(conf.relay_2 == 0)
@@ -178,59 +202,109 @@ void toggleSwitchB()
   server.send(200, "application/json", data);
 }
 
+/**
+ * Read alarm schedules
+ */
 void getAlarms()
 {
-  StaticJsonBuffer<200> jsonBuffer;
-  RtcDateTime dt = Rtc.GetDateTime();
-  JsonObject& root = jsonBuffer.createObject();
-  root["data"] = "";
-
   String data;
-  root.printTo(data);
+  String content = "20:15:30:7:1:s1:0|21:15:30:7:1:s2:1";
+  
+  StaticJsonBuffer<200> responseBuffer;
+  RtcDateTime dt = Rtc.GetDateTime();
+  JsonObject& response = responseBuffer.createObject();
+  response["status"] = "success";
+  response["data"] = content;
+  response.printTo(data);
 
   server.send(200, "application/json", data); 
 }
 
+/**
+ * Get RTC Time
+ */
 void getClockTime()
 {
-  StaticJsonBuffer<200> jsonBuffer;
+  String data;
+  
+  StaticJsonBuffer<200> responseBuffer;
   RtcDateTime now = Rtc.GetDateTime();
   printDateTime(now);
-  JsonObject& root = jsonBuffer.createObject();
-  root["dd"] = now.Day();
-  root["hh"] = now.Hour();
-  root["mm"] = now.Minute();
-  root["ss"] = now.Second();
-
-  String data;
-  root.printTo(data);
+  JsonObject& response = responseBuffer.createObject();
+  response["dd"] = now.Day();
+  response["hh"] = now.Hour();
+  response["mm"] = now.Minute();
+  response["ss"] = now.Second();
+  response.printTo(data);
 
   server.send(200, "application/json", data); 
 }
 
+/**
+ * Set alarm schedules
+ */
 void setAlarms()
 {
+  String data;
   
+  if (server.hasArg("plain")== false)
+  {
+      StaticJsonBuffer<200> inBuffer;
+      JsonObject& inObj = inBuffer.parseObject(server.arg("plain"));
+      //char data[400] = inObj["data"];
+
+      String content = "20:15:30:7:1:s1:0|21:15:30:7:1:s2:1";
+  
+      StaticJsonBuffer<200> outBuffer;
+      RtcDateTime dt = Rtc.GetDateTime();
+      JsonObject& root = outBuffer.createObject();
+      root["status"] = "success";
+      root["data"] = content;
+      root.printTo(data);
+  }  
+  
+  server.send(200, "application/json", data);
 }
 
+
+/**
+ * Sets RTC time
+ */
 void setClockTime()
 {  
+  String data;
+
+  StaticJsonBuffer<200> responseBuffer;
+  RtcDateTime dt = Rtc.GetDateTime();
+  
   if (server.hasArg("plain")== false){
-      StaticJsonBuffer<200> jsonBuffer;
-      JsonObject& root = jsonBuffer.parseObject(server.arg("plain"));
-      int yy = root["yy"];
-      int mm = root["mm"];
-      int dd = root["dd"];
-      int h = root["h"];
-      int i = root["i"];
-      int s = root["s"];
+      // Read request data
+      StaticJsonBuffer<200> requestBuffer;
+      JsonObject& request = requestBuffer.parseObject(server.arg("plain"));
+      int yy = request["yy"];
+      int mm = request["mm"];
+      int dd = request["dd"];
+      int h = request["h"];
+      int i = request["i"];
+      int s = request["s"];
     
       //RtcDateTime(uint16_t year, uint8_t month, uint8_t dayOfMonth, uint8_t hour, uint8_t minute, uint8_t second)
       RtcDateTime currentTime = RtcDateTime(yy,mm,dd,h,i,s); //define date and time object
       Rtc.SetDateTime(currentTime);
-  }  
+    }  
+
+    // Prepare response data
+    JsonObject& response = responseBuffer.createObject();
+    response["status"] = "success";
+    response["data"] = "";
+    response.printTo(data);
+
+    server.send(200, "application/json", data);
 }
 
+/**
+ * Initialize RTC
+ */
 void setupRTC()
 {
     Serial.print("compiled: ");
@@ -277,13 +351,16 @@ void setupRTC()
     Rtc.SetSquareWavePin(DS3231SquareWavePin_ModeNone); 
 }
 
+
 void loop() {
-  // put your main code here, to run repeatedly:
   server.handleClient();
 }
 
 #define countof(a) (sizeof(a) / sizeof(a[0]))
 
+/**
+ * Print date time from RTC
+ */
 void printDateTime(const RtcDateTime& dt)
 {
     char datestring[20];
