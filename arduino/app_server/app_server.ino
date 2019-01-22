@@ -9,16 +9,33 @@ IPAddress local_ip(192,168,5,1);
 IPAddress gateway(192,168,5,1);
 IPAddress subnet(255,255,255,0);
 
-/* This are the WiFi access point settings. Update them to your likin */
-const char *ssid = "NodeMcu";
-const char *password = "12345678";
+const int RELAY1=4;
+const int RELAY2=5;
+
+char clientid[25];
+
+char *ssid = "";
+char *password = "12345678";
 
 // Define a web server at port 80 for HTTP
 ESP8266WebServer server(80);
 
+struct Settings {
+   const int relay_1_id = 1;
+   int relay_1;
+   long relay_1_lastupdate;
+   const int relay_2_id = 2;
+   int relay_2;
+   long relay_2_lastupdate;
+};
+
+Settings conf = {};
+
 
 void setup() {
   Serial.begin(57600);
+
+  setupClientId();
   
   delay(10000);
   
@@ -26,6 +43,13 @@ void setup() {
   setupRTC();
   setupAP();
   setupWebServer();
+}
+
+void setupClientId()
+{
+  uint32_t chipid=ESP.getChipId();
+  snprintf(clientid,25,"SB-%08X",chipid);
+  ssid = clientid;
 }
 
 
@@ -38,7 +62,7 @@ void setupAP()
   WiFi.softAP(ssid, password);
   WiFi.softAPConfig(local_ip, gateway, subnet); 
   IPAddress myIP = WiFi.softAPIP(); //Get IP address
-  Serial.print("HotSpt IP:");
+  Serial.print("HotSpot IP:");
   Serial.println(myIP);
 }
 
@@ -50,6 +74,10 @@ void setupWebServer()
   server.on ( "/alarms/set", HTTP_POST, setAlarms );
   server.on ( "/time/get", getClockTime );
   server.on ( "/time/set", HTTP_POST, setClockTime );
+  server.on ( "/switch/1/set", HTTP_POST, toggleSwitchA );
+  server.on ( "/switch/1/get", HTTP_GET, readSwitchA ); 
+  server.on ( "/switch/2/set", HTTP_POST, toggleSwitchB );
+  server.on ( "/switch/2/get", HTTP_GET, readSwitchB );  
   server.on ( "/", handleRoot );
   server.onNotFound ( handleNotFound );
   
@@ -65,6 +93,89 @@ void handleRoot()
 void handleNotFound()
 {
   server.send(404, "text/plain", "Not found"); 
+}
+
+void readSwitchA()
+{
+  StaticJsonBuffer<100> jsonBuffer;
+  RtcDateTime now = Rtc.GetDateTime();
+  JsonObject& root = jsonBuffer.createObject();
+  root["id"] = conf.relay_1_id;
+  root["state"] = conf.relay_1;
+  root["lastupdate"] = conf.relay_1_lastupdate;
+
+  String data;
+  root.printTo(data);
+
+  server.send(200, "application/json", data); 
+}
+
+void toggleSwitchA()
+{
+  if(conf.relay_1 == 0)
+  {
+    conf.relay_1=1;
+    //digitalWrite(RELAY1, LOW);
+  }
+  else
+  {
+    conf.relay_1=0;
+    //digitalWrite(RELAY1, HIGH);
+  }
+
+  StaticJsonBuffer<100> jsonBuffer;
+  RtcDateTime now = Rtc.GetDateTime();
+  JsonObject& root = jsonBuffer.createObject();
+  root["id"] = conf.relay_1_id;
+  root["state"] = conf.relay_1;
+  root["lastupdate"] = conf.relay_1_lastupdate;
+
+  String data;
+  root.printTo(data);
+
+  server.send(200, "application/json", data);
+}
+
+
+void readSwitchB()
+{
+  StaticJsonBuffer<100> jsonBuffer;
+  RtcDateTime now = Rtc.GetDateTime();
+  JsonObject& root = jsonBuffer.createObject();
+  root["id"] = conf.relay_2_id;
+  root["state"] = conf.relay_2;
+  root["lastupdate"] = conf.relay_2_lastupdate;
+
+  String data;
+  root.printTo(data);
+
+  server.send(200, "application/json", data); 
+}
+
+void toggleSwitchB()
+{
+  if(conf.relay_2 == 0)
+  {
+    conf.relay_2=1;
+    //digitalWrite(RELAY2, LOW);
+  }
+  else
+  {
+    conf.relay_2=0;
+    //digitalWrite(RELAY2, HIGH);
+  }
+
+  StaticJsonBuffer<100> jsonBuffer;
+  RtcDateTime now = Rtc.GetDateTime();
+  JsonObject& root = jsonBuffer.createObject();
+  root["id"] = conf.relay_2_id;
+  root["state"] = conf.relay_2;
+  root["lastupdate"] = conf.relay_2_lastupdate;
+
+  String data;
+  root.printTo(data);
+
+  server.send(200, "application/json", data);
 }
 
 void getAlarms()
@@ -111,7 +222,7 @@ void setClockTime()
       int mm = root["mm"];
       int dd = root["dd"];
       int h = root["h"];
-      int i = root["m"];
+      int i = root["i"];
       int s = root["s"];
     
       //RtcDateTime(uint16_t year, uint8_t month, uint8_t dayOfMonth, uint8_t hour, uint8_t minute, uint8_t second)
