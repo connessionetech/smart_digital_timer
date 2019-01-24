@@ -11,6 +11,7 @@ IPAddress subnet(255,255,255,0);
 
 const int RELAY1=4;
 const int RELAY2=5;
+const int MAX_SCHEDULES = 20;
 
 char clientid[25];
 
@@ -29,8 +30,17 @@ struct Settings {
    long relay_2_lastupdate;
 };
 
-Settings conf = {};
+struct Schedule {
+   int hh;
+   int mm;
+   int ss;
+   int dow;
+   int target;
+   int recurring;
+};
 
+Settings conf = {};
+Schedule schedules[MAX_SCHEDULES] = {};
 
 void setup() {
   Serial.begin(57600);
@@ -77,9 +87,9 @@ void setupAP()
 void setupWebServer()
 {
   server.on ( "/", handleRoot );
-  server.on ( "/alarms/get", getAlarms );
+  server.on ( "/alarms/get", HTTP_GET, getAlarms );
   server.on ( "/alarms/set", HTTP_POST, setAlarms );
-  server.on ( "/time/get", getClockTime );
+  server.on ( "/time/get", HTTP_GET, getClockTime );
   server.on ( "/time/set", HTTP_POST, setClockTime );
   server.on ( "/switch/1/set", HTTP_POST, toggleSwitchA );
   server.on ( "/switch/1/get", HTTP_GET, readSwitchA ); 
@@ -208,7 +218,7 @@ void toggleSwitchB()
 void getAlarms()
 {
   String data;
-  String content = "20:15:30:7:1:s1:0|21:15:30:7:1:s2:1";
+  String content = "1:20:15:30:7:1:s1:0|2:21:15:30:7:1:s2:1";
   
   StaticJsonBuffer<200> responseBuffer;
   RtcDateTime dt = Rtc.GetDateTime();
@@ -227,7 +237,7 @@ void getClockTime()
 {
   String data;
   
-  StaticJsonBuffer<200> responseBuffer;
+  StaticJsonBuffer<100> responseBuffer;
   RtcDateTime now = Rtc.GetDateTime();
   printDateTime(now);
   JsonObject& response = responseBuffer.createObject();
@@ -250,16 +260,37 @@ void setAlarms()
   if (server.hasArg("plain")== false)
   {
       StaticJsonBuffer<200> inBuffer;
-      JsonObject& inObj = inBuffer.parseObject(server.arg("plain"));
-      //char data[400] = inObj["data"];
+      //JsonObject& inObj = inBuffer.parseObject(server.arg("plain"));
+      char content[] = "{\"status\":\"success\",\"data\":[{\"o\":1,\"h\":20,\"m\":15,\"s\":0,\"d\":7,\"r\":1,\"tr\":\"s1\",\"st\":0}]}";
+      JsonObject& inObj = inBuffer.parseObject(content);
+      const char* cod = inObj["status"];
+      const char* dat = inObj["data"];
+      
+      StaticJsonBuffer<100> elementsBuffer;
+      JsonArray& arr = elementsBuffer.parseArray(dat);
 
-      String content = "20:15:30:7:1:s1:0|21:15:30:7:1:s2:1";
-  
+      String schedules = "";
+
+      int count = arr.size();
+      for(int i=0;i<count;i++)
+      {
+        JsonObject& element = arr[i];
+        int o = element["o"];
+        int h = element["h"];
+        int m = element["m"];
+        int s = element["s"];
+        int d = element["d"];
+        int r = element["rp"];
+        const char* t = element["tr"];
+        int st = element["st"];
+
+        schedules = schedules + o + ":" + h + ":" + m + ":" + s + ":" + d + ":" + r + ":" + t + ":" + st; // schedule
+        schedules = schedules + "|"; // boundary
+      }
+
       StaticJsonBuffer<200> outBuffer;
-      RtcDateTime dt = Rtc.GetDateTime();
       JsonObject& root = outBuffer.createObject();
       root["status"] = "success";
-      root["data"] = content;
       root.printTo(data);
   }  
   
@@ -274,7 +305,7 @@ void setClockTime()
 {  
   String data;
 
-  StaticJsonBuffer<200> responseBuffer;
+  StaticJsonBuffer<100> responseBuffer;
   RtcDateTime dt = Rtc.GetDateTime();
   
   if (server.hasArg("plain")== false){
@@ -352,9 +383,25 @@ void setupRTC()
 }
 
 
-void loop() {
+void prepareSchedules(String& content)
+{
+  // Schedule schedules[MAX_SCHEDULES]
+  // capture into data structure
+  // sort chronologically
+}
+
+void evaluateSchedules()
+{
+  // get current time
+  RtcDateTime now = Rtc.GetDateTime();
+}
+
+
+void loop() 
+{
   server.handleClient();
 }
+
 
 #define countof(a) (sizeof(a) / sizeof(a[0]))
 
