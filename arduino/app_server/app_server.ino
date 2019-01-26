@@ -14,7 +14,6 @@ const int RELAY2=5;
 const int MAX_SCHEDULES = 20;
 
 char clientid[25];
-
 char *ssid = "";
 char *password = "12345678";
 
@@ -51,7 +50,8 @@ void setup() {
   
   Serial.println("Starting");  
   setupRTC();
-  setupAP();
+  //setupAP();
+  setupSta();
   setupWebServer();
 }
 
@@ -79,6 +79,24 @@ void setupAP()
   IPAddress myIP = WiFi.softAPIP(); //Get IP address
   Serial.print("HotSpot IP:");
   Serial.println(myIP);
+}
+
+
+void setupSta()
+{
+  // Connect to Wi-Fi network with SSID and password
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+  WiFi.begin("Tomato24", "bhagawadgita@123");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  // Print local IP address and start web server
+  Serial.println("");
+  Serial.println("WiFi connected.");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
 }
 
 /**
@@ -218,16 +236,45 @@ void toggleSwitchB()
 void getAlarms()
 {
   String data;
-  String content = "1:20:15:30:7:1:s1:0|2:21:15:30:7:1:s2:1";
   
-  StaticJsonBuffer<200> responseBuffer;
-  RtcDateTime dt = Rtc.GetDateTime();
+  // read from eeprom
+  String content = "1:20:15:0:7:0:s1:0|2:20:15:0:7:0:s1:0";
+  unsigned int schedulesStringLength = content.length();  
+  char schedules[schedulesStringLength];
+  content.toCharArray(schedules, schedulesStringLength);
+  
+  DynamicJsonBuffer responseBuffer;
   JsonObject& response = responseBuffer.createObject();
   response["status"] = "success";
-  response["data"] = content;
+  
+  JsonArray& items = schedulesToJson(response, schedules);  
+  response["data"] = items;
+  
   response.printTo(data);
 
   server.send(200, "application/json", data); 
+}
+
+/**
+ * Converts schedules string to json
+ */
+JsonArray& schedulesToJson(JsonObject& root, char *data)
+{
+  JsonArray& items = root.createNestedArray("data");
+
+  JsonObject& item = items.createNestedObject();
+  item["o"] = 1;
+  item["h"] = 15;
+  item["m"] = 20;
+  item["s"] = 0;
+  item["d"] = 5;
+  item["rp"] = 1;
+  item["tr"] = "s1";
+  item["st"] = 0;
+
+  items.add(item);
+
+  return items;
 }
 
 /**
@@ -250,52 +297,85 @@ void getClockTime()
   server.send(200, "application/json", data); 
 }
 
+
+
 /**
  * Set alarm schedules
  */
 void setAlarms()
 {
   String data;
-  
+  StaticJsonBuffer<100> outBuffer;
+  JsonObject& response = outBuffer.createObject();
+      
   if (server.hasArg("plain")== false)
   {
-      StaticJsonBuffer<200> inBuffer;
-      //JsonObject& inObj = inBuffer.parseObject(server.arg("plain"));
-      char content[] = "{\"status\":\"success\",\"data\":[{\"o\":1,\"h\":20,\"m\":15,\"s\":0,\"d\":7,\"r\":1,\"tr\":\"s1\",\"st\":0}]}";
-      JsonObject& inObj = inBuffer.parseObject(content);
-      const char* cod = inObj["status"];
-      const char* dat = inObj["data"];
+    response["status"] = "error";
+    response.printTo(data);
+    server.send(400, "application/json", data);
+  }
+  else
+  {
+      DynamicJsonBuffer inBuffer;
+      JsonObject& inObj = inBuffer.parseObject(server.arg("plain"));
       
-      StaticJsonBuffer<100> elementsBuffer;
-      JsonArray& arr = elementsBuffer.parseArray(dat);
+      // Test if parsing succeeds.
+      if (!inObj.success()) {
+          response["status"] = "error";
+          response.printTo(data);
+          server.send(400, "application/json", data);
+      }     
 
-      String schedules = "";
-
-      int count = arr.size();
-      for(int i=0;i<count;i++)
-      {
-        JsonObject& element = arr[i];
-        int o = element["o"];
-        int h = element["h"];
-        int m = element["m"];
-        int s = element["s"];
-        int d = element["d"];
-        int r = element["rp"];
-        const char* t = element["tr"];
-        int st = element["st"];
-
-        schedules = schedules + o + ":" + h + ":" + m + ":" + s + ":" + d + ":" + r + ":" + t + ":" + st; // schedule
-        schedules = schedules + "|"; // boundary
+      // get schdules
+      JsonArray& items = inObj["data"];
+      
+      // verify that we have less than max schedules
+      if(items.size() > MAX_SCHEDULES){
+          response["status"] = "error";
+          response["message"] = "Requested number of schedules exceeds max allowed!";
+          response.printTo(data);
+          server.send(400, "application/json", data);
       }
 
-      StaticJsonBuffer<200> outBuffer;
-      JsonObject& root = outBuffer.createObject();
-      root["status"] = "success";
-      root.printTo(data);
+      String schedules = jsonToSchedules(items);
+      //serialize schedules to eeprom
+
+      response["status"] = "success";
+      response.printTo(data);
+      server.send(200, "application/json", data);
   }  
-  
-  server.send(200, "application/json", data);
 }
+
+
+/**
+ * Converts schedules string to json
+ */
+String jsonToSchedules(JsonArray& items)
+{
+  String schedules = "";
+
+  int index = 0;
+  for (auto& item : items) {
+    int o = item["o"];
+    int h = item["h"];
+    int m = item["m"];
+    int s = item["s"];
+    int d = item["d"];
+    int r = item["rp"];
+    const char* t = item["tr"];
+    int st = item["st"];
+
+    schedules = schedules + o + ":" + h + ":" + m + ":" + s + ":" + d + ":" + r + ":" + t + ":" + st; // schedule string
+    index++;
+
+    if(index < items.size()){
+      schedules = schedules + "|"; // boundary
+    }
+  }
+
+  return schedules;
+}
+
 
 
 /**
@@ -382,13 +462,6 @@ void setupRTC()
     Rtc.SetSquareWavePin(DS3231SquareWavePin_ModeNone); 
 }
 
-
-void prepareSchedules(String& content)
-{
-  // Schedule schedules[MAX_SCHEDULES]
-  // capture into data structure
-  // sort chronologically
-}
 
 void evaluateSchedules()
 {
