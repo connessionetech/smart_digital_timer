@@ -3,6 +3,7 @@
 #include <Wire.h> // must be included here so that Arduino library object file references work
 #include <RtcDS3231.h>
 #include <ArduinoJson.h>
+#include <EEPROM.h>
 
 RtcDS3231<TwoWire> Rtc(Wire);
 IPAddress local_ip(192,168,5,1);
@@ -16,6 +17,9 @@ const int MAX_SCHEDULES = 20;
 char clientid[25];
 char *ssid = "";
 char *password = "12345678";
+
+int eeAddress = 0;
+boolean debug = true;
 
 // Define a web server at port 80 for HTTP
 ESP8266WebServer server(80);
@@ -44,6 +48,7 @@ Schedule schedules[MAX_SCHEDULES] = {};
 void setup() {
   Serial.begin(57600);
 
+  setupEeprom();
   setupClientId();
   
   delay(10000);
@@ -53,6 +58,14 @@ void setup() {
   //setupAP();
   setupSta();
   setupWebServer();
+}
+
+
+void setupEeprom()
+{
+  // start eeprom
+  EEPROM.begin(512);
+  eeAddress = 0;
 }
 
 /**
@@ -236,46 +249,100 @@ void toggleSwitchB()
 void getAlarms()
 {
   String data;
-  
-  // read from eeprom
-  String content = "1:20:15:0:7:0:s1:0|2:20:15:0:7:0:s1:0";
-  unsigned int schedulesStringLength = content.length();  
-  char schedules[schedulesStringLength];
-  content.toCharArray(schedules, schedulesStringLength);
-  
+
   DynamicJsonBuffer responseBuffer;
   JsonObject& response = responseBuffer.createObject();
+  
+  // read from eeprom
+  String content = "1:20:15:0:7:0:s1:0|2:20:15:0:7:0:s2:1";
+  unsigned int schedulesStringLength = content.length() + 1;  
+  char schedules[schedulesStringLength];
+  content.toCharArray(schedules, schedulesStringLength);
+    
   response["status"] = "success";
   
-  JsonArray& items = schedulesToJson(response, schedules);  
-  response["data"] = items;
+  JsonArray& items = response.createNestedArray("data");
+  int elements = strlen(schedules);
+  int itempos;
+  char *tok, *sav1 = NULL;
+  tok = strtok_r(schedules, "|", &sav1);
   
-  response.printTo(data);
+  while (tok) 
+  {
+      JsonObject& item = items.createNestedObject();
+      char *subtok, *sav2 = NULL;
+      subtok = strtok_r(tok, ":", &sav2);
+      itempos = -1;
+      
+      while (subtok) 
+      {
+        itempos++;
+        
+        if(itempos == 0)
+        {
+          item["o"] = subtok;
+        }
+        else if(itempos == 1)
+        {
+          item["h"] = subtok;
+        }
+        else if(itempos == 2)
+        {
+          item["m"] = subtok;
+        }
+        else if(itempos == 3)
+        {
+          item["s"] = subtok;
+        }
+        else if(itempos == 4)
+        {
+          item["d"] = subtok;
+        }
+        else if(itempos == 5)
+        {
+          item["rp"] = subtok;
+        }
+        else if(itempos == 6)
+        {
+          item["tr"] = subtok;
+        }
+        else if(itempos == 7)
+        {
+          item["st"] = subtok;
+        }
+        else
+        {
+          items.add(item);
+        }
+        
+        subtok = strtok_r(NULL, ":", &sav2);
+      }
+            
+      tok = strtok_r(NULL, "|", &sav1);
+  }
 
+  response.printTo(data);
   server.send(200, "application/json", data); 
 }
 
-/**
- * Converts schedules string to json
- */
-JsonArray& schedulesToJson(JsonObject& root, char *data)
+
+String getValue(String data, char separator, int index)
 {
-  JsonArray& items = root.createNestedArray("data");
+  int found = 0;
+  int strIndex[] = {0, -1};
+  int maxIndex = data.length()-1;
 
-  JsonObject& item = items.createNestedObject();
-  item["o"] = 1;
-  item["h"] = 15;
-  item["m"] = 20;
-  item["s"] = 0;
-  item["d"] = 5;
-  item["rp"] = 1;
-  item["tr"] = "s1";
-  item["st"] = 0;
+  for(int i=0; i<=maxIndex && found<=index; i++){
+    if(data.charAt(i)==separator || i==maxIndex){
+        found++;
+        strIndex[0] = strIndex[1]+1;
+        strIndex[1] = (i == maxIndex) ? i+1 : i;
+    }
+  }
 
-  items.add(item);
-
-  return items;
+  return found>index ? data.substring(strIndex[0], strIndex[1]) : "";
 }
+
 
 /**
  * Get RTC Time
@@ -337,8 +404,13 @@ void setAlarms()
           server.send(400, "application/json", data);
       }
 
-      String schedules = jsonToSchedules(items);
+      String content = jsonToSchedules(items);
+      unsigned int schedulesStringLength = content.length() + 1;  
+      char schedules[schedulesStringLength];
+      content.toCharArray(schedules, schedulesStringLength);
+      
       //serialize schedules to eeprom
+      writeSchedules(schedules);
 
       response["status"] = "success";
       response.printTo(data);
@@ -495,4 +567,45 @@ void printDateTime(const RtcDateTime& dt)
             dt.Minute(),
             dt.Second() );
     Serial.print(datestring);
+}
+
+void writeSchedules(char* schedules)
+{
+  eeAddress = 50;
+  writeEEPROM(eeAddress, strlen(schedules), schedules);
+  EEPROM.commit();
+}
+
+void writeEEPROM(int startAdr, int len, char* writeString) {
+  //yield();
+  for (int i = 0; i < len; i++) {
+    EEPROM.write(startAdr + i, writeString[i]);
+  }
+}
+
+void readSchedules(char* schedules)
+{
+  eeAddress = 50;
+  //readEEPROM(eeAddress, contentLength, schedules);
+}
+
+void readEEPROM(int startAdr, int maxLength, char* dest) {
+
+  for (int i = 0; i < maxLength; i++) {
+    dest[i] = char(EEPROM.read(startAdr + i));
+  }
+}
+
+void eraseSettings()
+{
+  debugPrint("Erasing eeprom...");
+  
+  for (int i = 0; i < 512; i++)
+    EEPROM.write(i, 0);
+}
+
+void debugPrint(String message) {
+  if (debug) {
+    Serial.println(message);
+  }
 }
