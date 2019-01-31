@@ -47,7 +47,7 @@ struct Schedule {
 };
 
 Settings conf = {};
-Schedule schedules[MAX_SCHEDULES] = {};
+Schedule user_schedules[MAX_SCHEDULES] = {};
 
 void setup() {
   Serial.begin(57600);
@@ -266,7 +266,6 @@ void getAlarms()
   response["status"] = "success";
   
   JsonArray& items = response.createNestedArray("data");
-  int elements = strlen(schedules);
   int itempos;
   char *tok, *sav1 = NULL;
   tok = strtok_r(schedules, "|", &sav1);
@@ -540,22 +539,25 @@ void setupRTC()
 }
 
 
-void prepareToEvalSchedules()
+void collectSchedule()
 {
   // read from eeprom
   if(conf.schedule_string_length == 0){
     readSchedules(); 
   }
+
+  // clear array
+  memset(&user_schedules[0], 0, sizeof(user_schedules));
    
   char schedules[conf.schedule_string_length];
   strcpy(schedules, conf.schedule_string);
   
-  int elements = strlen(schedules);
   int itempos;
   char *tok, *sav1 = NULL;
   tok = strtok_r(schedules, "|", &sav1);
 
- 
+  // collect schedules
+  int i=0;
   while (tok) 
   {
       Schedule schedule;
@@ -603,6 +605,8 @@ void prepareToEvalSchedules()
         else
         {
           // collect in array
+          user_schedules[i] = schedule;
+          i++;
         }
         
         subtok = strtok_r(NULL, ":", &sav2);
@@ -610,8 +614,11 @@ void prepareToEvalSchedules()
             
       tok = strtok_r(NULL, "|", &sav1);
   }
-}
 
+  int num_elements = sizeof(user_schedules) / sizeof( user_schedules[0] );
+  debugPrint("Total items = " + String(num_elements));
+
+}
 
 void loop() 
 {
