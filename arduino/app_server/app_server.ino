@@ -25,21 +25,25 @@ boolean debug = true;
 ESP8266WebServer server(80);
 
 struct Settings {
-   const int relay_1_id = 1;
-   int relay_1;
-   long relay_1_lastupdate;
-   const int relay_2_id = 2;
-   int relay_2;
-   long relay_2_lastupdate;
+   const int r1_id = 1;
+   int r1;
+   long r1_updated;
+   const int r2_id = 2;
+   int r2;
+   long r2_updated;
+   int schedule_string_length;
+   char schedule_string[350];
 };
 
 struct Schedule {
+   int index;
    int hh;
    int mm;
    int ss;
    int dow;
-   int target;
+   char* target;
    int recurring;
+   int target_state;
 };
 
 Settings conf = {};
@@ -159,9 +163,9 @@ void readSwitchA()
   StaticJsonBuffer<100> responseBuffer;
   RtcDateTime now = Rtc.GetDateTime();
   JsonObject& response = responseBuffer.createObject();
-  response["id"] = conf.relay_1_id;
-  response["state"] = conf.relay_1;
-  response["lastupdate"] = conf.relay_1_lastupdate;
+  response["id"] = conf.r1_id;
+  response["state"] = conf.r1;
+  response["lastupdate"] = conf.r1_updated;
   response.printTo(data);
 
   server.send(200, "application/json", data); 
@@ -174,23 +178,23 @@ void toggleSwitchA()
 {
   String data;
   
-  if(conf.relay_1 == 0)
+  if(conf.r1 == 0)
   {
-    conf.relay_1=1;
+    conf.r1=1;
     //digitalWrite(RELAY1, LOW);
   }
   else
   {
-    conf.relay_1=0;
+    conf.r1=0;
     //digitalWrite(RELAY1, HIGH);
   }
 
   StaticJsonBuffer<100> responseBuffer;
   RtcDateTime now = Rtc.GetDateTime();
   JsonObject& response = responseBuffer.createObject();
-  response["id"] = conf.relay_1_id;
-  response["state"] = conf.relay_1;
-  response["lastupdate"] = conf.relay_1_lastupdate;
+  response["id"] = conf.r1_id;
+  response["state"] = conf.r1;
+  response["lastupdate"] = conf.r1_updated;
   response.printTo(data);
   
   server.send(200, "application/json", data);
@@ -204,9 +208,9 @@ void readSwitchB()
   StaticJsonBuffer<100> jsonBuffer;
   RtcDateTime now = Rtc.GetDateTime();
   JsonObject& root = jsonBuffer.createObject();
-  root["id"] = conf.relay_2_id;
-  root["state"] = conf.relay_2;
-  root["lastupdate"] = conf.relay_2_lastupdate;
+  root["id"] = conf.r2_id;
+  root["state"] = conf.r2;
+  root["lastupdate"] = conf.r2_updated;
 
   String data;
   root.printTo(data);
@@ -219,23 +223,23 @@ void readSwitchB()
  */
 void toggleSwitchB()
 {
-  if(conf.relay_2 == 0)
+  if(conf.r2 == 0)
   {
-    conf.relay_2=1;
+    conf.r2=1;
     //digitalWrite(RELAY2, LOW);
   }
   else
   {
-    conf.relay_2=0;
+    conf.r2=0;
     //digitalWrite(RELAY2, HIGH);
   }
 
   StaticJsonBuffer<100> jsonBuffer;
   RtcDateTime now = Rtc.GetDateTime();
   JsonObject& root = jsonBuffer.createObject();
-  root["id"] = conf.relay_2_id;
-  root["state"] = conf.relay_2;
-  root["lastupdate"] = conf.relay_2_lastupdate;
+  root["id"] = conf.r2_id;
+  root["state"] = conf.r2;
+  root["lastupdate"] = conf.r2_updated;
 
   String data;
   root.printTo(data);
@@ -254,10 +258,10 @@ void getAlarms()
   JsonObject& response = responseBuffer.createObject();
   
   // read from eeprom
-  String content = "1:20:15:0:7:0:s1:0|2:20:15:0:7:0:s2:1";
-  unsigned int schedulesStringLength = content.length() + 1;  
-  char schedules[schedulesStringLength];
-  content.toCharArray(schedules, schedulesStringLength);
+  readSchedules(); 
+   
+  char schedules[conf.schedule_string_length];
+  strcpy(schedules, conf.schedule_string);
     
   response["status"] = "success";
   
@@ -410,7 +414,8 @@ void setAlarms()
       content.toCharArray(schedules, schedulesStringLength);
       
       //serialize schedules to eeprom
-      writeSchedules(schedules);
+      strcpy(conf.schedule_string, schedules);
+      writeSchedules();
 
       response["status"] = "success";
       response.printTo(data);
@@ -535,10 +540,76 @@ void setupRTC()
 }
 
 
-void evaluateSchedules()
+void prepareToEvalSchedules()
 {
-  // get current time
-  RtcDateTime now = Rtc.GetDateTime();
+  // read from eeprom
+  if(conf.schedule_string_length == 0){
+    readSchedules(); 
+  }
+   
+  char schedules[conf.schedule_string_length];
+  strcpy(schedules, conf.schedule_string);
+  
+  int elements = strlen(schedules);
+  int itempos;
+  char *tok, *sav1 = NULL;
+  tok = strtok_r(schedules, "|", &sav1);
+
+ 
+  while (tok) 
+  {
+      Schedule schedule;
+    
+      char *subtok, *sav2 = NULL;
+      subtok = strtok_r(tok, ":", &sav2);
+      itempos = -1;
+      
+      while (subtok) 
+      {
+        itempos++;
+        
+        if(itempos == 0)
+        {
+          schedule.index = (int)subtok;
+        }
+        else if(itempos == 1)
+        {
+          schedule.hh = (int)subtok;
+        }
+        else if(itempos == 2)
+        {
+          schedule.mm = (int)subtok;
+        }
+        else if(itempos == 3)
+        {
+          schedule.ss = (int)subtok;
+        }
+        else if(itempos == 4)
+        {
+          schedule.dow = (int)subtok;
+        }
+        else if(itempos == 5)
+        {
+          schedule.recurring = (int)subtok;
+        }
+        else if(itempos == 6)
+        {
+          schedule.target = subtok;
+        }
+        else if(itempos == 7)
+        {
+          schedule.target_state = (int)subtok;
+        }
+        else
+        {
+          // collect in array
+        }
+        
+        subtok = strtok_r(NULL, ":", &sav2);
+      }
+            
+      tok = strtok_r(NULL, "|", &sav1);
+  }
 }
 
 
@@ -569,30 +640,48 @@ void printDateTime(const RtcDateTime& dt)
     Serial.print(datestring);
 }
 
-void writeSchedules(char* schedules)
+void writeSchedules()
 {
   eeAddress = 50;
+
+  char *schedules = conf.schedule_string;
+  conf.schedule_string_length = strlen(schedules);
+  debugPrint("Wrting schedules length " + String(conf.schedule_string_length));
+  EEPROM.write(eeAddress, conf.schedule_string_length);
+
+  eeAddress++;
+  debugPrint("Wrting schedules " + String(conf.schedule_string));
   writeEEPROM(eeAddress, strlen(schedules), schedules);
+  
   EEPROM.commit();
 }
 
 void writeEEPROM(int startAdr, int len, char* writeString) {
   //yield();
   for (int i = 0; i < len; i++) {
-    EEPROM.write(startAdr + i, writeString[i]);
+    EEPROM.write(startAdr, writeString[i]);
+    startAdr++;
   }
 }
 
-void readSchedules(char* schedules)
+void readSchedules()
 {
   eeAddress = 50;
-  //readEEPROM(eeAddress, contentLength, schedules);
+
+  debugPrint("reading schedules length " + String(conf.schedule_string_length));
+  conf.schedule_string_length = EEPROM.read(eeAddress);
+  
+  eeAddress++;
+  char schedules[conf.schedule_string_length];
+  readEEPROM(eeAddress, conf.schedule_string_length, schedules);
+  debugPrint("reading schedules " + String(conf.schedule_string));
+  strcpy(conf.schedule_string, schedules);
 }
 
 void readEEPROM(int startAdr, int maxLength, char* dest) {
-
   for (int i = 0; i < maxLength; i++) {
-    dest[i] = char(EEPROM.read(startAdr + i));
+    dest[i] = char(EEPROM.read(startAdr));
+    startAdr++;
   }
 }
 
