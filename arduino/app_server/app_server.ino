@@ -13,6 +13,8 @@ IPAddress subnet(255,255,255,0);
 const int RELAY1=4;
 const int RELAY2=5;
 const int MAX_SCHEDULES = 20;
+const int EEPROM_MAX_LIMIT = 1024;
+const int EEPROM_START_ADDR = 50;
 
 char clientid[25];
 char *ssid = "";
@@ -20,6 +22,9 @@ char *password = "12345678";
 
 int eeAddress = 0;
 boolean debug = true;
+
+const String raw = "{\"data\":[{\"o\":1,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s1\",\"st\":0,\"ts\":1550327253},{\"o\":2,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s1\",\"st\":1,\"ts\":1550327253},{\"o\":3,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s2\",\"st\":0,\"ts\":1550327253},{\"o\":4,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s2\",\"st\":1,\"ts\":1550327253}]}";
+const String processed = "1:20:15:0,1,2,3,4,5:s1:0|2:20:15:0,1,2,3,4,5:s1:1|3:20:15:0,1,2,3,4,5:s2:0|4:20:15:0,1,2,3,4,5:s2:1";
 
 // Define a web server at port 80 for HTTP
 ESP8266WebServer server(80);
@@ -68,7 +73,7 @@ void setup() {
 void setupEeprom()
 {
   // start eeprom
-  EEPROM.begin(512);
+  EEPROM.begin(EEPROM_MAX_LIMIT);
   eeAddress = 0;
 }
 
@@ -122,8 +127,8 @@ void setupSta()
 void setupWebServer()
 {
   server.on ( "/", handleRoot );
-  server.on ( "/alarms/get", HTTP_GET, getAlarms );
-  server.on ( "/alarms/set", HTTP_POST, setAlarms );
+  server.on ( "/alarms/get", HTTP_GET, getSchedules );
+  server.on ( "/alarms/set", HTTP_POST, setSchedules );
   server.on ( "/time/get", HTTP_GET, getClockTime );
   server.on ( "/time/set", HTTP_POST, setClockTime );
   server.on ( "/switch/1/set", HTTP_POST, toggleSwitchA );
@@ -250,7 +255,7 @@ void toggleSwitchB()
 /**
  * Read alarm schedules
  */
-void getAlarms()
+void getSchedules()
 {
   String data;
 
@@ -258,17 +263,18 @@ void getAlarms()
   JsonObject& response = responseBuffer.createObject();
   
   // read from eeprom
-  readSchedules(); 
-   
-  char schedules[conf.schedule_string_length];
-  strcpy(schedules, conf.schedule_string);
+  //readSchedules(); 
+
+  char sch[processed.length()];
+  processed.toCharArray(sch, processed.length());
+  debugPrint("Preparing :" + String(sch));
     
   response["status"] = "success";
   
   JsonArray& items = response.createNestedArray("data");
   int itempos;
   char *tok, *sav1 = NULL;
-  tok = strtok_r(schedules, "|", &sav1);
+  tok = strtok_r(sch, "|", &sav1);
   
   while (tok) 
   {
@@ -295,21 +301,13 @@ void getAlarms()
         }
         else if(itempos == 3)
         {
-          item["s"] = subtok;
+          item["d"] = subtok;
         }
         else if(itempos == 4)
         {
-          item["d"] = subtok;
-        }
-        else if(itempos == 5)
-        {
-          item["rp"] = subtok;
-        }
-        else if(itempos == 6)
-        {
           item["tr"] = subtok;
         }
-        else if(itempos == 7)
+        else if(itempos == 5)
         {
           item["st"] = subtok;
         }
@@ -372,7 +370,7 @@ void getClockTime()
 /**
  * Set alarm schedules
  */
-void setAlarms()
+void setSchedules()
 {
   String data;
   StaticJsonBuffer<100> outBuffer;
@@ -387,7 +385,8 @@ void setAlarms()
   else
   {
       DynamicJsonBuffer inBuffer;
-      JsonObject& inObj = inBuffer.parseObject(server.arg("plain"));
+      //JsonObject& inObj = inBuffer.parseObject(server.arg("plain"));
+      JsonObject& inObj = inBuffer.parseObject(raw);
       
       // Test if parsing succeeds.
       if (!inObj.success()) {
@@ -408,13 +407,14 @@ void setAlarms()
       }
 
       String content = jsonToSchedules(items);
-      unsigned int schedulesStringLength = content.length() + 1;  
-      char schedules[schedulesStringLength];
-      content.toCharArray(schedules, schedulesStringLength);
+      debugPrint(content);
+      //unsigned int schedulesStringLength = content.length() + 1;  
+      //char schedules[schedulesStringLength];
+      //content.toCharArray(schedules, schedulesStringLength);
       
       //serialize schedules to eeprom
-      strcpy(conf.schedule_string, schedules);
-      writeSchedules();
+      //strcpy(conf.schedule_string, schedules);
+      //writeSchedules();
 
       response["status"] = "success";
       response.printTo(data);
@@ -429,19 +429,20 @@ void setAlarms()
 String jsonToSchedules(JsonArray& items)
 {
   String schedules = "";
-
   int index = 0;
   for (auto& item : items) {
     int o = item["o"];
     int h = item["h"];
     int m = item["m"];
-    int s = item["s"];
-    int d = item["d"];
-    int r = item["rp"];
-    const char* t = item["tr"];
+    const char* d = item["d"];
+    const char* tr = item["tr"];
     int st = item["st"];
+    long ts = item[String("ts")];
+    if(ts == 0){
+      ts = 1550327253;
+    }
 
-    schedules = schedules + o + ":" + h + ":" + m + ":" + s + ":" + d + ":" + r + ":" + t + ":" + st; // schedule string
+    schedules = schedules + o + ":" + h + ":" + m + ":" + d + ":" + tr + ":" + st; // schedule string
     index++;
 
     if(index < items.size()){
@@ -649,7 +650,7 @@ void printDateTime(const RtcDateTime& dt)
 
 void writeSchedules()
 {
-  eeAddress = 50;
+  eeAddress = EEPROM_START_ADDR;
 
   char *schedules = conf.schedule_string;
   conf.schedule_string_length = strlen(schedules);
@@ -673,7 +674,7 @@ void writeEEPROM(int startAdr, int len, char* writeString) {
 
 void readSchedules()
 {
-  eeAddress = 50;
+  eeAddress = EEPROM_START_ADDR;
 
   debugPrint("reading schedules length " + String(conf.schedule_string_length));
   conf.schedule_string_length = EEPROM.read(eeAddress);
@@ -696,7 +697,7 @@ void eraseSettings()
 {
   debugPrint("Erasing eeprom...");
   
-  for (int i = 0; i < 512; i++)
+  for (int i = 0; i < EEPROM_MAX_LIMIT; i++)
     EEPROM.write(i, 0);
 }
 
