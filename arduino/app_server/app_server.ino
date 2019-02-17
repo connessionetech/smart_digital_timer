@@ -21,6 +21,7 @@ char *ssid = "";
 char *password = "12345678";
 
 int eeAddress = 0;
+int schedules_index;
 boolean debug = true;
 
 const String raw = "{\"data\":[{\"o\":1,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s1\",\"st\":0,\"ts\":1550327253},{\"o\":2,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s1\",\"st\":1,\"ts\":1550327253},{\"o\":3,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s2\",\"st\":0,\"ts\":1550327253},{\"o\":4,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s2\",\"st\":1,\"ts\":1550327253}]}";
@@ -45,10 +46,10 @@ struct Schedule {
    int hh;
    int mm;
    int ss;
-   int dow;
+   char* dow;
    char* target;
-   int recurring;
    int target_state;
+   long timestamp;
 };
 
 Settings conf = {};
@@ -67,6 +68,8 @@ void setup() {
   //setupAP();
   setupSta();
   setupWebServer();
+
+  
 }
 
 
@@ -75,7 +78,14 @@ void setupEeprom()
   // start eeprom
   EEPROM.begin(EEPROM_MAX_LIMIT);
   eeAddress = 0;
+  
+  // read from eeprom
+  if(conf.schedule_string_length == 0){
+    //readSchedules(); 
+  }
 }
+
+
 
 /**
  * Generate unique client ID
@@ -263,7 +273,7 @@ void getSchedules()
   JsonObject& response = responseBuffer.createObject();
   
   // read from eeprom
-  //readSchedules(); 
+  readSchedules(); 
 
   char sch[processed.length()+1];
   processed.toCharArray(sch, processed.length()+1);
@@ -538,24 +548,19 @@ void setupRTC()
 
 void collectSchedule()
 {
-  /*
-  // read from eeprom
-  if(conf.schedule_string_length == 0){
-    readSchedules(); 
-  }
-
   // clear array
   memset(&user_schedules[0], 0, sizeof(user_schedules));
    
-  char schedules[conf.schedule_string_length];
-  strcpy(schedules, conf.schedule_string);
+  char sch[processed.length()+1];
+  processed.toCharArray(sch, processed.length()+1);
+  debugPrint(processed);
   
   int itempos;
   char *tok, *sav1 = NULL;
-  tok = strtok_r(schedules, "|", &sav1);
+  tok = strtok_r(sch, "|", &sav1);
 
   // collect schedules
-  int i=0;
+  schedules_index=0;
   while (tok) 
   {
       Schedule schedule;
@@ -582,41 +587,29 @@ void collectSchedule()
         }
         else if(itempos == 3)
         {
-          schedule.ss = (int)subtok;
+          schedule.dow = subtok;
         }
         else if(itempos == 4)
         {
-          schedule.dow = (int)subtok;
+          schedule.target = subtok;
         }
         else if(itempos == 5)
         {
-          schedule.recurring = (int)subtok;
+          schedule.target_state = (int)subtok;
         }
         else if(itempos == 6)
         {
-          schedule.target = subtok;
-        }
-        else if(itempos == 7)
-        {
-          schedule.target_state = (int)subtok;
-        }
-        else
-        {
-          // collect in array
-          user_schedules[i] = schedule;
-          i++;
-        }
-        
+          schedule.timestamp = strtol(subtok,NULL,10);
+        }        
         subtok = strtok_r(NULL, ":", &sav2);
       }
-            
+
+      schedules_index++;
+      user_schedules[schedules_index] = schedule;      
       tok = strtok_r(NULL, "|", &sav1);
   }
 
-  int num_elements = sizeof(user_schedules) / sizeof( user_schedules[0] );
-  debugPrint("Total items = " + String(num_elements));
-  */
-
+  debugPrint(String(schedules_index) + "items");
 }
 
 void loop() 
