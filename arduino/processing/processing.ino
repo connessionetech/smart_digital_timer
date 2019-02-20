@@ -17,7 +17,7 @@ int eeAddress = 0;
 boolean debug = true;
 int counter;
 
-const String processed = "1:20:15:0,1,2,3,4,5:s1:0:1550582771|2:01:30:0,1,2,3,4,5:s1:1:1550582771";
+const String processed = "1:03:15:0,1,2,3,4,5:s1:0:1550582771|2:20:30:0,1,2,3:s1:1:1550683976";
 const int MAX_SCHEDULES = 20;
 const int EEPROM_MAX_LIMIT = 512;
 const int EEPROM_START_ADDR = 0;
@@ -42,7 +42,6 @@ struct Settings {
 
 ScheduleItem user_schedules[MAX_SCHEDULES] = {};
 Settings conf = {};
-
 
 
 void setupEeprom()
@@ -182,16 +181,40 @@ void sortSchedule()
     }
 }
 
+
+/*
+ * qsort timewise sorting of schedules
+ */
 int compare(struct ScheduleItem *elem1, struct ScheduleItem *elem2)
 {
-     if ( elem1->dow < elem2->dow)
-        return -1;
+    // check by reg timestamp
 
-     else if (elem1->dow > elem2->dow)
-        return 1;
+    // check by dow
 
-     else
-        return 0;
+    // check by time
+
+    if ( elem1->dow == elem2->dow)
+    {
+      if(elem1->hh == elem2->hh)
+      {
+        if(elem1->mm == elem2->mm)
+        {
+          return elem1->parent_index - elem2->parent_index;
+        }
+        else
+        {
+          return elem1->mm - elem2->mm;
+        }
+      }
+      else
+      {
+        return elem1->hh - elem2->hh;
+      }
+    }
+    else
+    {
+      return elem1->dow - elem2->dow;
+    }
 }
 
 void collectSchedule()
@@ -307,7 +330,7 @@ void collectSchedule()
 
 void toString(ScheduleItem item)
 {
-  Serial.println(String(item.hh) + ":" + String(item.mm) + ":" + ":" + String(item.dow));
+  Serial.println(String(item.hh) + ":" + String(item.mm) + ":" + String(item.dow) + ":" + String(item.reg_timestamp));
 }
 
 void debugPrint(String message) {
