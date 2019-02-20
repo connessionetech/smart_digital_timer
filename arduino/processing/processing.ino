@@ -1,6 +1,8 @@
 #include <ArduinoJson.h>
 #include <EEPROM.h>
 #include <stdlib.h>
+#include <TimeLib.h>
+
 
 /* for normal hardware wire use below */
 #include <Wire.h> // must be included here so that Arduino library object file references work
@@ -8,17 +10,17 @@
 RtcDS3231<TwoWire> Rtc(Wire);
 /* for normal hardware wire use above */
 
+
+
 int eeAddress = 0;
 boolean debug = true;
+int counter;
 
+const String processed = "1:20:15:0,1,2,3,4,5:s1:0:1550582771|2:20:15:0,1,2,3,4,5:s1:1:1550582771|3:20:15:0,1,2,3,4,5:s2:0:1550582771|4:20:15:0,1,2,3,4,5:s2:1:1550582771";
 const int MAX_SCHEDULES = 20;
 const int EEPROM_MAX_LIMIT = 512;
 const int EEPROM_START_ADDR = 0;
 const unsigned long SECONDS_IN_30_YEARS = 946708560;
-int counter;
-
-const String processed = "1:20:15:0,1,2,3,4,5:s1:0:1550582771|2:20:15:0,1,2,3,4,5:s1:1:1550582771|3:20:15:0,1,2,3,4,5:s2:0:1550582771|4:20:15:0,1,2,3,4,5:s2:1:1550582771";
-
 
 struct ScheduleItem {
    int parent_index;
@@ -28,8 +30,8 @@ struct ScheduleItem {
    char* target;
    int target_state;
    long reg_timestamp;
+   long scheduled_time;
 };
-
 
 
 struct Settings {
@@ -64,16 +66,7 @@ void setupRTC()
 
     if (!Rtc.IsDateTimeValid()) 
     {
-        // Common Cuases:
-        //    1) first time you ran and the device wasn't running yet
-        //    2) the battery on the device is low or even missing
-
         Serial.println("RTC lost confidence in the DateTime!");
-
-        // following line sets the RTC to the date & time this sketch was compiled
-        // it will also reset the valid flag internally unless the Rtc device is
-        // having an issue
-
         Rtc.SetDateTime(compiled);
     }
 
@@ -107,63 +100,21 @@ void setupRTC()
 void setup() 
 {
   Serial.begin(57600);
-  collectSchedule();
+  
   setupEeprom();
   setupRTC();  
+
+  collectSchedule();
+  sortSchedule();
+  evaluate();
 }
+
 
 void loop() { 
   if (!Rtc.IsDateTimeValid()) 
   {
       Serial.println("RTC lost confidence in the DateTime!");
   }
-  
-  //RtcDateTime now = Rtc.GetDateTime();
-  //evaluate();
-}
-
-
-void evaluate()
-{
-  RtcDateTime now = Rtc.GetDateTime();
-  /*
-  for(int i=0;i<counter;i++)
-  {
-    
-    Schedule sch =  user_schedules[i];
-
-    int hh = sch.hh;
-    int mm = sch.mm;
-    
-    int current_hh = now.Hour();
-    int current_mm = now.Minute();
-
-    int current_dow = now.DayOfWeek();
-
-    for(int k=0;k<sch.total_days;i++)
-    {
-      int dow = sch.days[k];      
-
-      // simple check by order of day of week
-      if(current_dow <= dow)
-      {
-        // check time
-        if(current_hh >= hh && current_mm >= mm)
-        {
-          // alarm condition occurs
-          if(sch.target == "s1")
-          {
-            debugPrint("s1 " + String(sch.target_state));
-          }
-          else if(sch.target == "s2")
-          {
-            debugPrint("s2 " + String(sch.target_state));
-          }
-        }
-      }
-    }
-  }
-  */
 }
 
 
@@ -204,6 +155,16 @@ void printDateTime(const RtcDateTime& dt)
             dt.Minute(),
             dt.Second() );
     Serial.print(datestring);
+}
+
+void evaluate()
+{
+   
+}
+
+void sortSchedule()
+{
+   
 }
 
 void collectSchedule()
@@ -299,7 +260,7 @@ void collectSchedule()
         item.target = sch_target;
         item.target_state = sch_target_state;
         item.reg_timestamp = sch_timestamp;
-
+        item.scheduled_time = 0; // eval timestamp
         
         user_schedules[counter] = item; 
         counter++;
