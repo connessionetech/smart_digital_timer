@@ -2,21 +2,22 @@
 #include <EEPROM.h>
 #include <stdlib.h>
 #include <TimeLib.h>
+#include <stdio.h>
 
 
 /* for normal hardware wire use below */
-#include <Wire.h> // must be included here so that Arduino library object file references work
+#include <Wire.h>
 #include <RtcDS3231.h>
 RtcDS3231<TwoWire> Rtc(Wire);
 /* for normal hardware wire use above */
 
-
+typedef int (*compfn)(const void*, const void*);
 
 int eeAddress = 0;
 boolean debug = true;
 int counter;
 
-const String processed = "1:20:15:0,1,2,3,4,5:s1:0:1550582771|2:20:15:0,1,2,3,4,5:s1:1:1550582771|3:20:15:0,1,2,3,4,5:s2:0:1550582771|4:20:15:0,1,2,3,4,5:s2:1:1550582771";
+const String processed = "1:20:15:0,1,2,3,4,5:s1:0:1550582771|2:01:30:0,1,2,3,4,5:s1:1:1550582771";
 const int MAX_SCHEDULES = 20;
 const int EEPROM_MAX_LIMIT = 512;
 const int EEPROM_START_ADDR = 0;
@@ -164,7 +165,33 @@ void evaluate()
 
 void sortSchedule()
 {
-   
+    debugPrint("before");
+  
+    for(int i=0;i<counter;i++){
+      ScheduleItem item = user_schedules[i];
+      toString(item);
+    }
+    
+    qsort((void *) &user_schedules, counter, sizeof(struct ScheduleItem), (compfn)compare );
+
+    debugPrint("after");
+
+    for(int i=0;i<counter;i++){
+      ScheduleItem item = user_schedules[i];
+      toString(item);
+    }
+}
+
+int compare(struct ScheduleItem *elem1, struct ScheduleItem *elem2)
+{
+     if ( elem1->dow < elem2->dow)
+        return -1;
+
+     else if (elem1->dow > elem2->dow)
+        return 1;
+
+     else
+        return 0;
 }
 
 void collectSchedule()
@@ -205,15 +232,15 @@ void collectSchedule()
         
         if(itempos == 0)
         {
-          sch_index = (int)subtok;
+          sscanf (subtok, "%d", &sch_index);
         }
         else if(itempos == 1)
         {
-          sch_hh = (int)subtok;
+          sscanf (subtok, "%d", &sch_hh);
         }
         else if(itempos == 2)
         {
-          sch_mm = (int)subtok;
+          sscanf (subtok, "%d", &sch_mm);
         }
         else if(itempos == 3)
         {
@@ -224,7 +251,11 @@ void collectSchedule()
           toki = strtok_r(subtok, ",", &savi);
           while (toki) 
           {
-            sch_days[j] = (int)toki;
+            int d;   
+            sscanf (toki, "%d", &d);            
+            sch_days[j] = d;
+            j++;
+            
             toki = strtok_r(NULL, ",", &savi);
           }
 
@@ -236,7 +267,7 @@ void collectSchedule()
         }
         else if(itempos == 5)
         {
-          sch_target_state = (int)subtok;
+          sscanf (subtok, "%d", &sch_target_state);
         }
         else if(itempos == 6)
         {
@@ -273,6 +304,11 @@ void collectSchedule()
   debugPrint(String(counter) + "items");
 }
 
+
+void toString(ScheduleItem item)
+{
+  Serial.println(String(item.hh) + ":" + String(item.mm) + ":" + ":" + String(item.dow));
+}
 
 void debugPrint(String message) {
   if (debug) {
