@@ -32,9 +32,7 @@ struct ScheduleItem {
    char* target;
    int target_state;
    long reg_timestamp;
-   int reg_dd;
-   int reg_mm;
-   int reg_yy;
+   int status = 0;
 };
 
 
@@ -140,30 +138,28 @@ void evaluate()
   }
   else
   {
-    //ScheduleItem scheduleToImplement = getApplicableScheduleForToday();
     dtnow = Rtc.GetDateTime();
-    applyNearestPastSchedule(dtnow);
+    getNearestPastSchedule(dtnow);
   }
 }
 
 
-
-void applyNearestPastSchedule(RtcDateTime& dt)
+/**
+ * Find nearest past schedule for a relay with respect to today
+ */
+struct ScheduleItem getNearestPastSchedule(RtcDateTime& dt)
 {
-  debugPrint("finding nearest past schedule");
-  
-  // clear array
+  debugPrint("Finding nearest past schedule");
+
+  ScheduleItem candidate;
   ScheduleItem applicable_schedules[MAX_SCHEDULES] = {};
-
-
-  // variables
   int i = counter;
   int j = 0;
 
-
   /*
-   * Collect candidate schedules
+   * Collect valid candidate schedules
    */
+   
   while(i >= 0)
   {
     ScheduleItem sch = user_schedules[i];    
@@ -180,38 +176,85 @@ void applyNearestPastSchedule(RtcDateTime& dt)
     i--;
   }
 
-
    /*
    * Sort collected schedules
    */
 
-   
+    if(j>0)
+    {
+      qsort((void *) &applicable_schedules, counter, sizeof(struct ScheduleItem), (compfn)nearestPast );
+      candidate = applicable_schedules[0];
+    }
+    else
+    {
+      candidate.parent_index = -1;
+      candidate.hh = -1;
+      candidate.mm = -1;
+      candidate.dow = -1;
+      candidate.reg_timestamp = -1;
+      candidate.target_state = -1;
+    }
+
+    /*
+    * Clear array
+    */
+    memset(&applicable_schedules[0], 0, sizeof(applicable_schedules));
 
 
-   /*
+    /*
     * Apply best match schedule
     */
-
-  memset(&applicable_schedules[0], 0, sizeof(applicable_schedules));
+       
+   return candidate;
 }
 
 
+/**
+ * Compare to sort nearest past schedule
+ */
+int nearestPast(struct ScheduleItem *elem1, struct ScheduleItem *elem2)
+{
+  if ( elem1->reg_timestamp == elem2->reg_timestamp)
+  {
+    return abs(elem1->dow - elem2->dow);    
+  }
+  else
+  {
+    return elem1->reg_timestamp - elem2->reg_timestamp;
+  }
+}
+
+
+/**
+ * Get absolute difference between current day of week and schedule's day of week
+ */
 int getDowDiff(RtcDateTime& dt, ScheduleItem& t2)
 {
-    abs(dt.DayOfWeek() - sch.dow);
+    abs(dt.DayOfWeek() - t2.dow);
 }
 
 
+/**
+ * Get difference between current date and schedule date in `days`
+ */
 int getDayDiff(RtcDateTime& dt, ScheduleItem& t2)
 {
   return (((dt.Epoch32Time() - t2.reg_timestamp) /60)/60)/24;
 }
 
+
+/**
+ * Check if schedule time is before current time
+ */
 boolean isPastTime(RtcDateTime& dt, ScheduleItem& t2)
 {
   return false;
 }
 
+
+/**
+ * Sort schedules list
+ */
 void sortSchedule()
 {
     //debugPrint("before");
@@ -268,7 +311,9 @@ int compare(struct ScheduleItem *elem1, struct ScheduleItem *elem2)
 }
 
 
-
+/**
+ * Parse schedule string and collect schedules in an array
+ */
 void collectSchedule()
 {
   debugPrint("collecting");
@@ -366,13 +411,8 @@ void collectSchedule()
         item.target = sch_target;
         item.target_state = sch_target_state;
         item.reg_timestamp = sch_timestamp;
-
-        // remember creation time of each schedule
-        RtcDateTime dt =  RtcDateTime(sch_timestamp);        
-        item.reg_dd = dt.Day();
-        item.reg_mm = dt.Month();
-        item.reg_yy = dt.Year();
-        
+        item.status = 1;
+                
         user_schedules[counter] = item; 
         counter++;
       }      
@@ -385,16 +425,24 @@ void collectSchedule()
 }
 
 
+/**
+ * Schedule toString method
+ */
 void toString(ScheduleItem item)
 {
   Serial.println(String(item.hh) + ":" + String(item.mm) + ":" + String(item.dow) + ":" + String(item.reg_timestamp));
 }
 
+
+/**
+ * printing
+ */
 void debugPrint(String message) {
   if (debug) {
     Serial.println(message);
   }
 }
+
 
 int countChars( char* s, char c )
 {
