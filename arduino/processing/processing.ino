@@ -248,6 +248,11 @@ int getDayDiff(RtcDateTime& dt, ScheduleItem& t2)
  */
 boolean isPastTime(RtcDateTime& dt, ScheduleItem& t2)
 {
+  if((t2.hh <= dt.Hour()) && (t2.mm <= dt.Minute()))
+  {
+    return true;
+  }
+  
   return false;
 }
 
