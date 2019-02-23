@@ -17,11 +17,12 @@ int eeAddress = 0;
 boolean debug = true;
 int counter;
 
-const String processed = "1:03:15:0,1,2,3,4,5:s1:0:1550582771|2:20:30:0,1,2,3:s1:1:1550683976";
+const String processed = "1:03:15:0,1,2,3,4,5:s1:0:1550951769|2:20:30:0,1,2,3:s1:1:1550951769";
 const int MAX_SCHEDULES = 20;
 const int EEPROM_MAX_LIMIT = 512;
 const int EEPROM_START_ADDR = 0;
-const unsigned long SECONDS_IN_30_YEARS = 946708560;
+
+RtcDateTime dtnow;
 
 struct ScheduleItem {
    int parent_index;
@@ -31,17 +32,14 @@ struct ScheduleItem {
    char* target;
    int target_state;
    long reg_timestamp;
-   long scheduled_time;
+   int reg_dd;
+   int reg_mm;
+   int reg_yy;
 };
 
-
-struct Settings {
-   int schedule_string_length;
-   String schedule_string;
-};
 
 ScheduleItem user_schedules[MAX_SCHEDULES] = {};
-Settings conf = {};
+
 
 
 void setupEeprom()
@@ -106,36 +104,13 @@ void setup()
 
   collectSchedule();
   sortSchedule();
+  
   evaluate();
 }
 
 
 void loop() { 
-  if (!Rtc.IsDateTimeValid()) 
-  {
-      Serial.println("RTC lost confidence in the DateTime!");
-  }
-}
-
-
-/*
- *  Converts epoch seconds since 1970 jan 1 
- *  to epoch seconds since 2000 jan 1
- */
-long fromEpoch(long unsigned seconds)
-{
-  return seconds - SECONDS_IN_30_YEARS;
-}
-
-
-
-/*
- *  Converts epoch seconds since 2000 jan 1 
- *  to epoch seconds since 1970 jan 1
- */
-long toEpoch(long unsigned seconds)
-{
-  return seconds + SECONDS_IN_30_YEARS;
+  
 }
 
 
@@ -159,25 +134,100 @@ void printDateTime(const RtcDateTime& dt)
 
 void evaluate()
 {
+  if (!Rtc.IsDateTimeValid()) 
+  {
+      Serial.println("RTC lost confidence in the DateTime!");
+  }
+  else
+  {
+    //ScheduleItem scheduleToImplement = getApplicableScheduleForToday();
+    dtnow = Rtc.GetDateTime();
+    applyNearestPastSchedule(dtnow);
+  }
+}
+
+
+
+void applyNearestPastSchedule(RtcDateTime& dt)
+{
+  debugPrint("finding nearest past schedule");
+  
+  // clear array
+  ScheduleItem applicable_schedules[MAX_SCHEDULES] = {};
+
+
+  // variables
+  int i = counter;
+  int j = 0;
+
+
+  /*
+   * Collect candidate schedules
+   */
+  while(i >= 0)
+  {
+    ScheduleItem sch = user_schedules[i];    
+    
+    if(getDayDiff(dt, sch) >= getDowDiff(dt,sch))
+    {
+      if(isPastTime(dt, sch))
+      {
+        applicable_schedules[j] = sch;
+        j++;
+      }
+    }
+    
+    i--;
+  }
+
+
+   /*
+   * Sort collected schedules
+   */
+
    
+
+
+   /*
+    * Apply best match schedule
+    */
+
+  memset(&applicable_schedules[0], 0, sizeof(applicable_schedules));
+}
+
+
+int getDowDiff(RtcDateTime& dt, ScheduleItem& t2)
+{
+    abs(dt.DayOfWeek() - sch.dow);
+}
+
+
+int getDayDiff(RtcDateTime& dt, ScheduleItem& t2)
+{
+  return (((dt.Epoch32Time() - t2.reg_timestamp) /60)/60)/24;
+}
+
+boolean isPastTime(RtcDateTime& dt, ScheduleItem& t2)
+{
+  return false;
 }
 
 void sortSchedule()
 {
-    debugPrint("before");
+    //debugPrint("before");
   
     for(int i=0;i<counter;i++){
       ScheduleItem item = user_schedules[i];
-      toString(item);
+      //toString(item);
     }
     
     qsort((void *) &user_schedules, counter, sizeof(struct ScheduleItem), (compfn)compare );
 
-    debugPrint("after");
+    //debugPrint("after");
 
     for(int i=0;i<counter;i++){
       ScheduleItem item = user_schedules[i];
-      toString(item);
+      //toString(item);
     }
 }
 
@@ -216,6 +266,8 @@ int compare(struct ScheduleItem *elem1, struct ScheduleItem *elem2)
       return elem1->dow - elem2->dow;
     }
 }
+
+
 
 void collectSchedule()
 {
@@ -314,7 +366,12 @@ void collectSchedule()
         item.target = sch_target;
         item.target_state = sch_target_state;
         item.reg_timestamp = sch_timestamp;
-        item.scheduled_time = 0; // eval timestamp
+
+        // remember creation time of each schedule
+        RtcDateTime dt =  RtcDateTime(sch_timestamp);        
+        item.reg_dd = dt.Day();
+        item.reg_mm = dt.Month();
+        item.reg_yy = dt.Year();
         
         user_schedules[counter] = item; 
         counter++;
