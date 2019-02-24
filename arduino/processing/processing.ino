@@ -1,5 +1,4 @@
 #include <ArduinoJson.h>
-#include <EEPROM.h>
 #include <stdlib.h>
 #include <TimeLib.h>
 #include <stdio.h>
@@ -39,16 +38,6 @@ struct ScheduleItem {
 
 
 ScheduleItem user_schedules[MAX_SCHEDULES] = {};
-
-
-
-void setupEeprom()
-{
-  // start eeprom
-  //EEPROM.begin(EEPROM_MAX_LIMIT);
-  eeAddress = 0;
-}
-
 
 void setupRTC()
 {
@@ -99,7 +88,6 @@ void setup()
 {
   Serial.begin(57600);
   
-  //setupEeprom();
   setupRTC();  
 
   collectSchedule();
@@ -142,7 +130,8 @@ void evaluate()
   {
     dtnow = Rtc.GetDateTime();
     debugPrint("starting");
-    getNearestPastSchedule(dtnow, "s1");
+    ScheduleItem sch1  = getNearestPastSchedule(dtnow, "s1");
+    toString(sch1);    
   }
 }
 
@@ -189,10 +178,8 @@ struct ScheduleItem getNearestPastSchedule(RtcDateTime& dt, char* target)
    */
     if(j>0)
     {
-      qsort((void *) &applicable_schedules, counter, sizeof(struct ScheduleItem), (compfn)nearestPast );
+      qsort((void *) &applicable_schedules, counter, sizeof(struct ScheduleItem), (compfn)nearestPast );      
       candidate = applicable_schedules[0];
-
-      Serial.println(String(candidate.hh) + ":" + String(candidate.mm) + ":" + String(candidate.dow) + ":" + String(candidate.reg_timestamp));
 
       /*for(int k=0;k<j;k++){
       ScheduleItem sample = applicable_schedules[j];
@@ -474,7 +461,7 @@ char *my_strcpy(char *destination, char *source)
  */
 void toString(ScheduleItem item)
 {
-  Serial.println(String(item.hh) + ":" + String(item.mm) + ":" + String(item.dow) + ":" + String(item.reg_timestamp));
+  Serial.println(String(item.index) + ":" + String(item.hh) + ":" + String(item.mm) + ":" + String(item.dow) + ":" + String(item.reg_timestamp));
 }
 
 
