@@ -12,6 +12,7 @@ RtcDS3231<TwoWire> Rtc(Wire);
 /* for normal hardware wire use above */
 
 typedef int (*compfn)(const void*, const void*);
+char *my_strcpy(char *destination, char *source);
 
 int eeAddress = 0;
 boolean debug = true;
@@ -26,10 +27,11 @@ RtcDateTime dtnow;
 
 struct ScheduleItem {
    int parent_index;
+   int index;
    int hh;
    int mm;
    int dow;
-   char* target;
+   char target[3];
    int target_state;
    long reg_timestamp;
    int status = 0;
@@ -97,7 +99,7 @@ void setup()
 {
   Serial.begin(57600);
   
-  setupEeprom();
+  //setupEeprom();
   setupRTC();  
 
   collectSchedule();
@@ -139,7 +141,8 @@ void evaluate()
   else
   {
     dtnow = Rtc.GetDateTime();
-    getNearestPastSchedule(dtnow);
+    debugPrint("starting");
+    getNearestPastSchedule(dtnow, "s1");
   }
 }
 
@@ -147,9 +150,9 @@ void evaluate()
 /**
  * Find nearest past schedule for a relay with respect to today
  */
-struct ScheduleItem getNearestPastSchedule(RtcDateTime& dt)
+struct ScheduleItem getNearestPastSchedule(RtcDateTime& dt, char* target)
 {
-  debugPrint("Finding nearest past schedule");
+  Serial.println("looking for nearest past schedule");
 
   ScheduleItem candidate;
   ScheduleItem applicable_schedules[MAX_SCHEDULES] = {};
@@ -160,17 +163,22 @@ struct ScheduleItem getNearestPastSchedule(RtcDateTime& dt)
    * Collect valid candidate schedules
    */
    
-  while(i >= 0)
+  while(i > 0)
   {
-    ScheduleItem sch = user_schedules[i];    
-    
-    if(getDayDiff(dt, sch) >= getDowDiff(dt,sch))
-    {
-      if(isPastTime(dt, sch))
+    ScheduleItem sch = user_schedules[i];
+
+    // collect scheudles for requested target only
+    if (strcmp(sch.target, target) == 0)
+    {      
+      if(getDayDiff(dt, sch) >= getDowDiff(dt,sch))
       {
-        applicable_schedules[j] = sch;
-        j++;
-      }
+        if(isPastTime(dt, sch))
+        {
+          Serial.println("chance");
+          applicable_schedules[j] = sch;
+          j++;
+        }
+      }      
     }
     
     i--;
@@ -179,11 +187,17 @@ struct ScheduleItem getNearestPastSchedule(RtcDateTime& dt)
    /*
    * Sort collected schedules
    */
-
     if(j>0)
     {
       qsort((void *) &applicable_schedules, counter, sizeof(struct ScheduleItem), (compfn)nearestPast );
       candidate = applicable_schedules[0];
+
+      Serial.println(String(candidate.hh) + ":" + String(candidate.mm) + ":" + String(candidate.dow) + ":" + String(candidate.reg_timestamp));
+
+      /*for(int k=0;k<j;k++){
+      ScheduleItem sample = applicable_schedules[j];
+      toString(sample);
+      }*/
     }
     else
     {
@@ -229,8 +243,8 @@ int nearestPast(struct ScheduleItem *elem1, struct ScheduleItem *elem2)
  * Get absolute difference between current day of week and schedule's day of week
  */
 int getDowDiff(RtcDateTime& dt, ScheduleItem& t2)
-{
-    abs(dt.DayOfWeek() - t2.dow);
+{ 
+    return abs(dt.DayOfWeek() - t2.dow);
 }
 
 
@@ -247,10 +261,17 @@ int getDayDiff(RtcDateTime& dt, ScheduleItem& t2)
  * Check if schedule time is before current time
  */
 boolean isPastTime(RtcDateTime& dt, ScheduleItem& t2)
-{
-  if((t2.hh <= dt.Hour()) && (t2.mm <= dt.Minute()))
+{  
+  if(t2.hh < dt.Hour())
   {
     return true;
+  }
+  else if(t2.hh == dt.Hour())
+  {
+    if(t2.mm <= dt.Minute())
+    {
+      return true;
+    }
   }
   
   return false;
@@ -343,7 +364,7 @@ void collectSchedule()
       int sch_mm;
       int sch_days[6];
       int sch_total_days;
-      char* sch_target;
+      char sch_target[3];
       int sch_target_state;
       long sch_timestamp;
     
@@ -388,7 +409,7 @@ void collectSchedule()
         }
         else if(itempos == 4)
         {
-          sch_target = subtok;
+          my_strcpy(sch_target, subtok);
         }
         else if(itempos == 5)
         {
@@ -410,10 +431,11 @@ void collectSchedule()
         int dow = sch_days[k];
 
         item.parent_index = sch_index;
+        item.index = counter;
         item.hh = sch_hh;
         item.mm = sch_mm;
         item.dow = dow;
-        item.target = sch_target;
+        my_strcpy(item.target, sch_target); 
         item.target_state = sch_target_state;
         item.reg_timestamp = sch_timestamp;
         item.status = 1;
@@ -427,6 +449,23 @@ void collectSchedule()
   }
 
   debugPrint(String(counter) + "items");
+}
+
+
+
+char *my_strcpy(char *destination, char *source)
+{
+    char *start = destination;
+ 
+    while(*source != '\0')
+    {
+        *destination = *source;
+        destination++;
+        source++;
+    }
+ 
+    *destination = '\0'; // add '\0' at the end
+    return start;
 }
 
 
