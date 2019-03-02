@@ -49,6 +49,7 @@ void setupRTC()
 
     RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
     printDateTime(compiled);
+   
     Serial.println();
 
     if (!Rtc.IsDateTimeValid()) 
@@ -128,10 +129,10 @@ void evaluate()
   }
   else
   {
-    dtnow = Rtc.GetDateTime();
-    debugPrint("starting");
+    //dtnow = Rtc.GetDateTime();
+    dtnow = RtcDateTime(604808986);
     ScheduleItem sch1  = getNearestPastSchedule(dtnow, "s1");
-    toString(sch1);    
+    toString(sch1);
   }
 }
 
@@ -163,7 +164,6 @@ struct ScheduleItem getNearestPastSchedule(RtcDateTime& dt, char* target)
       {
         if(isPastTime(dt, sch))
         {
-          Serial.println("chance");
           applicable_schedules[j] = sch;
           j++;
         }
@@ -178,13 +178,21 @@ struct ScheduleItem getNearestPastSchedule(RtcDateTime& dt, char* target)
    */
     if(j>0)
     {
+      for(int k=0;k<j;k++){
+      ScheduleItem sample = applicable_schedules[k];
+      Serial.println(sample.dow);
+      delay(10);
+      }
+
+      Serial.println("after");
       qsort((void *) &applicable_schedules, counter, sizeof(struct ScheduleItem), (compfn)nearestPast );      
       candidate = applicable_schedules[0];
 
-      /*for(int k=0;k<j;k++){
-      ScheduleItem sample = applicable_schedules[j];
-      toString(sample);
-      }*/
+      for(int k=0;k<j;k++){
+      ScheduleItem sample = applicable_schedules[k];
+      Serial.println(sample.dow);
+      delay(10);
+      }
     }
     else
     {
@@ -213,16 +221,26 @@ struct ScheduleItem getNearestPastSchedule(RtcDateTime& dt, char* target)
 /**
  * Compare to sort nearest past schedule
  */
-int nearestPast(struct ScheduleItem *elem1, struct ScheduleItem *elem2)
+int nearestPast(const void *a, const void *b)
 {
-  if ( elem1->reg_timestamp == elem2->reg_timestamp)
-  {
-    return abs(elem1->dow - elem2->dow);    
-  }
-  else
-  {
-    return elem1->reg_timestamp - elem2->reg_timestamp;
-  }
+  /* cast pointers to adjacent elements to struct ScheduleItem* */
+    struct ScheduleItem *x = a, *y = b;
+
+    /* (x->time < y->time) - (x->time > y->time) - descending sort
+     * comparison avoids potential overflow
+     */
+    if (x->reg_timestamp != y->reg_timestamp)
+        return (x->reg_timestamp < y->reg_timestamp) - 
+               (x->reg_timestamp > y->reg_timestamp);
+    /* compare dow next */
+    else if (x->dow != y->dow)
+        return (x->dow < y->dow) - (x->dow > y->dow);
+    /* compare hh next */
+    else if (x->hh != y->hh)
+        return (x->hh < y->hh) - (x->hh > y->hh);
+    /* finally compare mm */
+    else
+        return (x->mm < y->mm) - (x->mm > y->mm);
 }
 
 
@@ -248,17 +266,24 @@ int getDayDiff(RtcDateTime& dt, ScheduleItem& t2)
  * Check if schedule time is before current time
  */
 boolean isPastTime(RtcDateTime& dt, ScheduleItem& t2)
-{  
-  if(t2.hh < dt.Hour())
+{
+  if(t2.dow < dt.DayOfWeek())
   {
-    return true;
-  }
-  else if(t2.hh == dt.Hour())
-  {
-    if(t2.mm <= dt.Minute())
-    {
       return true;
-    }
+  }
+  else
+  {
+      if(t2.hh < dt.Hour())
+      {
+        return true;
+      }
+      else if(t2.hh == dt.Hour())
+      {
+        if(t2.mm <= dt.Minute())
+        {
+          return true;
+        }
+      }
   }
   
   return false;
