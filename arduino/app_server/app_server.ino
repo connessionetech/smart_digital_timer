@@ -3,7 +3,7 @@
 #include <Wire.h> // must be included here so that Arduino library object file references work
 #include <RtcDS3231.h>
 #include <ArduinoJson.h>
-#include <EEPROM.h>
+#include <ESP_EEPROM.h>
 #include <ArduinoLog.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -21,8 +21,9 @@ IPAddress subnet(255,255,255,0);
 const int RELAY1=4;
 const int RELAY2=5;
 const int MAX_SCHEDULES = 20;
-const int EEPROM_MAX_LIMIT = 1024;
-const int EEPROM_START_ADDR = 50;
+const int EEPROM_MAX_LIMIT = 3072;
+const int EEPROM_START_ADDR = 0;
+const int SCHEDULES_START_ADDR = 50;
 
 int counter = 0;
 
@@ -33,9 +34,6 @@ char *password = "12345678";
 int eeAddress = 0;
 int schedules_index;
 boolean schedules_dirty = false;
-
-const String raw = "{\"data\":[{\"o\":1,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s1\",\"st\":0,\"ts\":1550327253},{\"o\":2,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s1\",\"st\":1,\"ts\":1550327253},{\"o\":3,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s2\",\"st\":0,\"ts\":1550327253},{\"o\":4,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s2\",\"st\":1,\"ts\":1550327253}]}";
-const String processed = "1:03:15:0,1,2,3,4,5:s1:0:1550951769|2:20:30:0,1,2,3:s1:1:1550951769";
 
 // Define a web server at port 80 for HTTP
 ESP8266WebServer server(80);
@@ -48,8 +46,11 @@ struct Settings {
    const int r2_id = 2;
    int r2;
    long r2_updated;
+};
+
+struct Schedule {
    int schedule_string_length;
-   String schedule_string;
+   char str[1024];
 };
 
 struct ScheduleItem {
@@ -64,7 +65,7 @@ struct ScheduleItem {
    int status = 0;
 };
 
-
+Schedule dat = {};
 Settings conf = {};
 ScheduleItem user_schedules[MAX_SCHEDULES] = {};
 
@@ -94,8 +95,11 @@ void loop()
 {
   if(schedules_dirty)
   {
+    readSchedules();
     collectSchedule();
-    sortSchedule();
+    //sortSchedule();
+
+    schedules_dirty = false;
   }
 
   evaluate();
@@ -111,8 +115,9 @@ void setupEeprom()
   EEPROM.begin(EEPROM_MAX_LIMIT);
   eeAddress = 0;
   
-  // read from eeprom
-  if(conf.schedule_string_length == 0){
+  // Check if the EEPROM contains valid data from another run
+  // If so, overwrite the 'default' values set up in our struct
+  if(EEPROM.percentUsed()>=0) {
     readSchedules(); 
   }
 }
@@ -170,6 +175,7 @@ void setupWebServer()
   server.on ( "/", handleRoot );
   server.on ( "/alarms/get", HTTP_GET, getSchedules );
   server.on ( "/alarms/set", HTTP_POST, setSchedules );
+  server.on ( "/alarms/clear", HTTP_POST, clearSchedules );
   server.on ( "/time/get", HTTP_GET, getClockTime );
   server.on ( "/time/set", HTTP_POST, setClockTime );
   server.on ( "/switch/1/set", HTTP_POST, toggleSwitchA );
@@ -306,11 +312,15 @@ void getSchedules()
   JsonObject& response = responseBuffer.createObject();
   
   // read from eeprom
-  //readSchedules(); 
+  readSchedules(); 
+
+  if(dat.schedule_string_length < 4){
+    String content = ""; 
+    content.toCharArray(dat.str, content.length());
+  } 
+
   
-  char sch[processed.length()+1];
-  processed.toCharArray(sch, processed.length()+1);
-  Log.notice("Preparing schedule data: %s"CR, sch);
+  Log.notice("Preparing schedule data: %s"CR, dat.str);
     
   response["status"] = "success";
   
@@ -318,7 +328,7 @@ void getSchedules()
   
   int itempos;
   char *tok, *sav1 = NULL;
-  tok = strtok_r(sch, "|", &sav1);
+  tok = strtok_r(dat.str, "|", &sav1);
   
   while (tok) 
   {
@@ -364,6 +374,7 @@ void getSchedules()
     }
     else if(itempos == 5)
     {
+      sscanf (subtok, "%d", &sch_target_state);
       item["st"] = sch_target_state;
     }
     else if(itempos == 6)
@@ -405,6 +416,40 @@ void getClockTime()
   server.send(200, "application/json", data); 
 }
 
+
+/*
+ * Clears all schedule data from eeprom
+ */
+void clearSchedules()
+{
+  Log.trace("clearSchedules called"CR);
+
+  String data;
+  StaticJsonBuffer<100> outBuffer;
+  JsonObject& response = outBuffer.createObject();
+
+  boolean result = EEPROM.wipe();
+  if (result) {    
+    memset(dat.str, 0, sizeof(dat.str));
+    dat.schedule_string_length = 0;
+    Log.notice("All EEPROM data wiped"CR);
+    schedules_dirty = true;
+  } else {
+    Log.notice("EEPROM data could not be wiped from flash store"CR);
+  } 
+      
+  if (!result)
+  {
+    response["status"] = "error";
+  }
+  else
+  {
+    response["status"] = "success";  
+  }  
+
+  response.printTo(data);
+  server.send(200, "application/json", data);
+}
 
 
 /**
@@ -449,8 +494,8 @@ void setSchedules()
           server.send(400, "application/json", data);
       }
 
-      String content = jsonToSchedules(items);            
-      conf.schedule_string = content;
+      String content = jsonToSchedules(items);    
+      content.toCharArray(dat.str, content.length());
       
       //serialize schedules to eeprom      
       writeSchedules();
@@ -586,18 +631,18 @@ void collectSchedule()
   // clear array
   memset(&user_schedules[0], 0, sizeof(user_schedules));
    
-  char sch[processed.length()+1];
-  processed.toCharArray(sch, processed.length()+1);
-  Log.trace("%s"CR, sch);
+  Log.trace("Schedule data : %s"CR, dat.str);
   
   int itempos;
   char *tok, *sav1 = NULL;
-  tok = strtok_r(sch, "|", &sav1);
+  tok = strtok_r(dat.str, "|", &sav1);
 
   // collect schedules
   counter=0;
   while (tok) 
   {
+      Log.trace("tok : %s"CR, tok);
+      
       int sch_index;
       int sch_hh;
       int sch_mm;
@@ -686,7 +731,7 @@ void collectSchedule()
       tok = strtok_r(NULL, "|", &sav1);
   }
 
-  Log.notice("Total of %d items collected"CR, schedules_index);
+  Log.notice("Total of %d items collected"CR, counter);
 }
 
 
@@ -953,34 +998,17 @@ void printDateTime(const RtcDateTime& dt)
  */
 void writeSchedules()
 {
-  eeAddress = EEPROM_START_ADDR;
-
-  int len = conf.schedule_string.length();
-  conf.schedule_string_length = len;
-  Log.notice("Calculating & writing schedules data length:  length %d "CR, len);  
-  EEPROM.write(eeAddress, len);
-
-  eeAddress++;
-
-  char sch[conf.schedule_string.length() + 1];
-  conf.schedule_string.toCharArray(sch, conf.schedule_string.length());
-  Log.notice("Writing schedules data:  %s "CR, sch);
-  writeEEPROM(eeAddress, len, conf.schedule_string);
+  Log.notice("Writing schedules data. %s"CR, dat.str); 
   
-  EEPROM.commit();
-}
+  EEPROM.put(SCHEDULES_START_ADDR, dat);
+  boolean ok = EEPROM.commit();
 
-
-/*
- * Writes string data to eeprom
- */
-void writeEEPROM(int startAdr, int len, String writeString) {
-  //yield();
-  for (int i = 0; i < len; i++) {
-    EEPROM.write(startAdr, writeString[i]);
-    startAdr++;
+  if(ok){
+    Log.notice("Commit OK"CR);
+    schedules_dirty = true;
+  }else{
+    Log.notice("Commit failed"CR);
   }
-  EEPROM.write(startAdr,'\0');
 }
 
 
@@ -989,29 +1017,10 @@ void writeEEPROM(int startAdr, int len, String writeString) {
  */
 void readSchedules()
 {
-  eeAddress = EEPROM_START_ADDR;
-
-  conf.schedule_string_length = EEPROM.read(eeAddress);
-  Log.notice("Schedules length is %d : "CR,  conf.schedule_string_length);  
-
-  /*
-  eeAddress++;
-  
-  char schedules[conf.schedule_string_length];
-  readEEPROM(eeAddress, conf.schedule_string_length, schedules);
-  debugPrint("reading schedules " + String(conf.schedule_string));
-  conf.schedule_string = String(schedules);
-  */
+  Log.notice("Reading schedules data."CR);
+  EEPROM.get(SCHEDULES_START_ADDR, dat);
+  Log.notice("schedules data. %s"CR, dat.str);
 }
-
-void readEEPROM(int startAdr, int maxLength, char* dest) {
-  for (int i = 0; i < maxLength; i++) {
-    dest[i] = char(EEPROM.read(startAdr));
-    startAdr++;
-  }
-  dest[startAdr]='\0';
-}
-
 
 
 /*
