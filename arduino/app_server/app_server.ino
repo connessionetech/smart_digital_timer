@@ -49,7 +49,7 @@ struct Settings {
 };
 
 struct Schedule {
-   int schedule_string_length;
+   int strlength;
    char str[1024];
 };
 
@@ -314,7 +314,7 @@ void getSchedules()
   // read from eeprom
   readSchedules(); 
 
-  if(dat.schedule_string_length < 4){
+  if(dat.strlength < 4){
     String content = ""; 
     content.toCharArray(dat.str, content.length());
   } 
@@ -431,7 +431,8 @@ void clearSchedules()
   boolean result = EEPROM.wipe();
   if (result) {    
     memset(dat.str, 0, sizeof(dat.str));
-    dat.schedule_string_length = 0;
+    dat.strlength = 0;
+    writeSchedules();
     Log.notice("All EEPROM data wiped"CR);
     schedules_dirty = true;
   } else {
