@@ -4,6 +4,14 @@
 #include <RtcDS3231.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
+#include <ArduinoLog.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+
+#define countof(a) (sizeof(a) / sizeof(a[0]))
+typedef int (*compfn)(const void*, const void*);
+char *my_strcpy(char *destination, char *source);
 
 RtcDS3231<TwoWire> Rtc(Wire);
 IPAddress local_ip(192,168,5,1);
@@ -16,19 +24,22 @@ const int MAX_SCHEDULES = 20;
 const int EEPROM_MAX_LIMIT = 1024;
 const int EEPROM_START_ADDR = 50;
 
+int counter = 0;
+
 char clientid[25];
 char *ssid = "";
 char *password = "12345678";
 
 int eeAddress = 0;
 int schedules_index;
-boolean debug = true;
+boolean schedules_dirty = false;
 
 const String raw = "{\"data\":[{\"o\":1,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s1\",\"st\":0,\"ts\":1550327253},{\"o\":2,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s1\",\"st\":1,\"ts\":1550327253},{\"o\":3,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s2\",\"st\":0,\"ts\":1550327253},{\"o\":4,\"h\":20,\"m\":15,\"d\":\"0,1,2,3,4,5\",\"tr\":\"s2\",\"st\":1,\"ts\":1550327253}]}";
-const String processed = "1:20:15:0,1,2,3,4,5:s1:0:1550327253|2:20:15:0,1,2,3,4,5:s1:1:1550327253|3:20:15:0,1,2,3,4,5:s2:0:1550327253|4:20:15:0,1,2,3,4,5:s2:1:1550327253";
+const String processed = "1:03:15:0,1,2,3,4,5:s1:0:1550951769|2:20:30:0,1,2,3:s1:1:1550951769";
 
 // Define a web server at port 80 for HTTP
 ESP8266WebServer server(80);
+RtcDateTime dtnow;
 
 struct Settings {
    const int r1_id = 1;
@@ -41,36 +52,57 @@ struct Settings {
    String schedule_string;
 };
 
-struct Schedule {
+struct ScheduleItem {
+   int parent_index;
    int index;
    int hh;
    int mm;
-   int ss;
-   char* dow;
-   char* target;
+   int dow;
+   char target[3];
    int target_state;
-   long timestamp;
+   long reg_timestamp;
+   int status = 0;
 };
 
-Settings conf = {};
-Schedule user_schedules[MAX_SCHEDULES] = {};
 
-void setup() {
+Settings conf = {};
+ScheduleItem user_schedules[MAX_SCHEDULES] = {};
+
+/* Setup */
+void setup() 
+{
   Serial.begin(57600);
+  
+  while(!Serial && !Serial.available()){}
+  Log.begin(LOG_LEVEL_VERBOSE, &Serial, true);
 
   setupEeprom();
   setupClientId();
   
-  delay(10000);
-  
-  Serial.println("Starting");  
+  delay(5000);  
+  Log.notice("Starting"CR); 
+   
   setupRTC();
   //setupAP();
   setupSta();
-  setupWebServer();
-
-  
+  setupWebServer();  
 }
+
+
+
+void loop() 
+{
+  if(schedules_dirty)
+  {
+    collectSchedule();
+    sortSchedule();
+  }
+
+  evaluate();
+  delay(20);
+  server.handleClient();
+}
+
 
 
 void setupEeprom()
@@ -81,7 +113,7 @@ void setupEeprom()
   
   // read from eeprom
   if(conf.schedule_string_length == 0){
-    //readSchedules(); 
+    readSchedules(); 
   }
 }
 
@@ -109,26 +141,25 @@ void setupAP()
   WiFi.softAP(ssid, password);
   WiFi.softAPConfig(local_ip, gateway, subnet); 
   IPAddress myIP = WiFi.softAPIP(); //Get IP address
-  Serial.print("HotSpot IP:");
-  Serial.println(myIP);
+  Log.notice("HotSpot IP: %d.%d.%d.%d"CR, myIP[0], myIP[1], myIP[2], myIP[3]);
 }
 
 
+/**
+ * Station mode : Connects to router for testings apis
+ */
 void setupSta()
 {
   // Connect to Wi-Fi network with SSID and password
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
+  Log.notice("Connecting to %s"CR, ssid);
   WiFi.begin("Tomato24", "bhagawadgita@123");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
-    Serial.print(".");
+    Log.notice(".."CR);
   }
   // Print local IP address and start web server
-  Serial.println("");
-  Serial.println("WiFi connected.");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+  IPAddress myIP = WiFi.localIP();
+  Log.notice("WiFi connected! IP address: %d.%d.%d.%d"CR, myIP[0], myIP[1], myIP[2], myIP[3]);
 }
 
 /**
@@ -149,7 +180,7 @@ void setupWebServer()
   server.onNotFound ( handleNotFound );
   
   server.begin();
-  Serial.println("HTTP server started");
+  Log.notice("HTTP server started"CR);
 }
 
 /**
@@ -267,91 +298,88 @@ void toggleSwitchB()
  */
 void getSchedules()
 {
+  Log.trace("getSchedules called"CR);
+  
   String data;
 
   DynamicJsonBuffer responseBuffer;
   JsonObject& response = responseBuffer.createObject();
   
   // read from eeprom
-  readSchedules(); 
-
+  //readSchedules(); 
+  
   char sch[processed.length()+1];
   processed.toCharArray(sch, processed.length()+1);
-  debugPrint("Preparing :" + String(sch));
+  Log.notice("Preparing schedule data: %s"CR, sch);
     
   response["status"] = "success";
   
   JsonArray& items = response.createNestedArray("data");
+  
   int itempos;
   char *tok, *sav1 = NULL;
   tok = strtok_r(sch, "|", &sav1);
   
   while (tok) 
   {
-      JsonObject& item = items.createNestedObject();
-      char *subtok, *sav2 = NULL;
-      subtok = strtok_r(tok, ":", &sav2);
-      itempos = -1;
+    JsonObject& item = items.createNestedObject();
+    
+    int sch_index;
+    int sch_hh;
+    int sch_mm;
+    char sch_target[3];
+    int sch_target_state;
+    long sch_timestamp;
+  
+    char *subtok, *sav2 = NULL;
+    subtok = strtok_r(tok, ":", &sav2);
+    itempos = -1;
+    
+    while (subtok) 
+    {
+    itempos++;
+    
+    if(itempos == 0)
+    {
+      sscanf (subtok, "%d", &sch_index);
+      item["o"] = sch_index;
+    }
+    else if(itempos == 1)
+    {
+      sscanf (subtok, "%d", &sch_hh);
+      item["h"] = sch_hh;
+    }
+    else if(itempos == 2)
+    {
+      sscanf (subtok, "%d", &sch_mm);
+      item["m"] = sch_mm;
+    }
+    else if(itempos == 3)
+    {     
+      item["d"] = subtok;
+    }
+    else if(itempos == 4)
+    {
+      item["tr"] = subtok;
+    }
+    else if(itempos == 5)
+    {
+      item["st"] = sch_target_state;
+    }
+    else if(itempos == 6)
+    {
+      sch_timestamp = strtol(subtok,NULL,10);
+      item["ts"] = sch_timestamp;
+    }      
       
-      while (subtok) 
-      {
-        itempos++;
-        
-        if(itempos == 0)
-        {
-          item["o"] = subtok;
-        }
-        else if(itempos == 1)
-        {
-          item["h"] = subtok;
-        }
-        else if(itempos == 2)
-        {
-          item["m"] = subtok;
-        }
-        else if(itempos == 3)
-        {
-          item["d"] = subtok;
-        }
-        else if(itempos == 4)
-        {
-          item["tr"] = subtok;
-        }
-        else if(itempos == 5)
-        {
-          item["st"] = subtok;
-        }
-        else if(itempos == 6)
-        {
-          item["ts"] = subtok;
-        }
-        
-        subtok = strtok_r(NULL, ":", &sav2);
-      }
-            
-      tok = strtok_r(NULL, "|", &sav1);
+    subtok = strtok_r(NULL, ":", &sav2);
+    }
+  
+    tok = strtok_r(NULL, "|", &sav1);
   }
 
   response.printTo(data);
   server.send(200, "application/json", data); 
-}
-
-
-String getValue(String data, char separator, int index)
-{
-  int found = 0;
-  int strIndex[] = {0, -1};
-  int maxIndex = data.length()-1;
-
-  for(int i=0; i<=maxIndex && found<=index; i++){
-    if(data.charAt(i)==separator || i==maxIndex){
-        found++;
-        strIndex[0] = strIndex[1]+1;
-        strIndex[1] = (i == maxIndex) ? i+1 : i;
-    }
-  }
-
-  return found>index ? data.substring(strIndex[0], strIndex[1]) : "";
 }
 
 
@@ -360,6 +388,8 @@ String getValue(String data, char separator, int index)
  */
 void getClockTime()
 {
+  Log.trace("getClockTime called"CR);
+  
   String data;
   
   StaticJsonBuffer<100> responseBuffer;
@@ -382,6 +412,8 @@ void getClockTime()
  */
 void setSchedules()
 {
+  Log.trace("setSchedules called"CR);
+  
   String data;
   StaticJsonBuffer<100> outBuffer;
   JsonObject& response = outBuffer.createObject();
@@ -413,6 +445,7 @@ void setSchedules()
           response["status"] = "error";
           response["message"] = "Requested number of schedules exceeds max allowed!";
           response.printTo(data);
+          Log.notice("Requested number of schedules exceeds max allowed!: %s"CR);
           server.send(400, "application/json", data);
       }
 
@@ -466,6 +499,8 @@ String jsonToSchedules(JsonArray& items)
  */
 void setClockTime()
 {  
+  Log.trace("setClockTime called"CR);
+  
   String data;
 
   StaticJsonBuffer<100> responseBuffer;
@@ -501,69 +536,76 @@ void setClockTime()
  */
 void setupRTC()
 {
-    Serial.print("compiled: ");
-    Serial.print(__DATE__);
-    Serial.println(__TIME__);
-    
+    Log.trace("compiled date : %s time : %s"CR, __DATE__, __TIME__);
     Rtc.Begin();
 
     RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
     printDateTime(compiled);
-    Serial.println();
-
+    Log.trace("======================================"CR);
 
     if (!Rtc.IsDateTimeValid()) 
     {
-        Serial.println("RTC lost confidence in the DateTime!");
+        Log.notice("RTC lost confidence in the DateTime!"CR);
         Rtc.SetDateTime(compiled);
     }
 
     if (!Rtc.GetIsRunning())
-    {
-        Serial.println("RTC was not actively running, starting now");
+    {;
+        Log.notice("RTC was not actively running, starting now!"CR);
         Rtc.SetIsRunning(true);
     }
 
     RtcDateTime now = Rtc.GetDateTime();
     if (now < compiled) 
     {
-        Serial.println("RTC is older than compile time!  (Updating DateTime)");
+        Log.notice("RTC is older than compile time!  (Updating DateTime)"CR);
         Rtc.SetDateTime(compiled);
     }
     else if (now > compiled) 
     {
-        Serial.println("RTC is newer than compile time. (this is expected)");
+        Log.notice("RTC is newer than compile time. (this is expected)"CR);
     }
     else if (now == compiled) 
     {
-        Serial.println("RTC is the same as compile time! (not expected but all is fine)");
+        Log.notice("RTC is the same as compile time! (not expected but all is fine)"CR);
     }
 
-    // never assume the Rtc was last configured by you, so
     // just clear them to your needed state
     Rtc.Enable32kHzPin(false);
     Rtc.SetSquareWavePin(DS3231SquareWavePin_ModeNone); 
 }
 
 
+/**
+ * Parse schedule string and collect schedules in an array
+ */
 void collectSchedule()
 {
+  Log.trace("Collecting schedules"CR);
+  
   // clear array
   memset(&user_schedules[0], 0, sizeof(user_schedules));
    
   char sch[processed.length()+1];
   processed.toCharArray(sch, processed.length()+1);
-  debugPrint(processed);
+  Log.trace("%s"CR, sch);
   
   int itempos;
   char *tok, *sav1 = NULL;
   tok = strtok_r(sch, "|", &sav1);
 
   // collect schedules
-  schedules_index=0;
+  counter=0;
   while (tok) 
   {
-      Schedule schedule;
+      int sch_index;
+      int sch_hh;
+      int sch_mm;
+      int sch_days[6];
+      int sch_total_days;
+      char sch_target[3];
+      int sch_target_state;
+      long sch_timestamp;
     
       char *subtok, *sav2 = NULL;
       subtok = strtok_r(tok, ":", &sav2);
@@ -575,50 +617,316 @@ void collectSchedule()
         
         if(itempos == 0)
         {
-          schedule.index = (int)subtok;
+          sscanf (subtok, "%d", &sch_index);
         }
         else if(itempos == 1)
         {
-          schedule.hh = (int)subtok;
+          sscanf (subtok, "%d", &sch_hh);
         }
         else if(itempos == 2)
         {
-          schedule.mm = (int)subtok;
+          sscanf (subtok, "%d", &sch_mm);
         }
         else if(itempos == 3)
         {
-          schedule.dow = subtok;
+          int total_days = countChars( subtok, ',' ) + 1;
+          int days[total_days];
+          int j = 0;
+          char *toki, *savi = NULL;
+          toki = strtok_r(subtok, ",", &savi);
+          while (toki) 
+          {
+            int d;   
+            sscanf (toki, "%d", &d);            
+            sch_days[j] = d;
+            j++;
+            
+            toki = strtok_r(NULL, ",", &savi);
+          }
+
+          sch_total_days = total_days;
         }
         else if(itempos == 4)
         {
-          schedule.target = subtok;
+          my_strcpy(sch_target, subtok);
         }
         else if(itempos == 5)
         {
-          schedule.target_state = (int)subtok;
+          sscanf (subtok, "%d", &sch_target_state);
         }
         else if(itempos == 6)
         {
-          schedule.timestamp = strtol(subtok,NULL,10);
-        }        
+          sch_timestamp = strtol(subtok,NULL,10);
+        }      
+          
         subtok = strtok_r(NULL, ":", &sav2);
       }
 
-      schedules_index++;
-      user_schedules[schedules_index] = schedule;      
+
+      // break into individual schedules
+      for(int k=0;k<sch_total_days;k++)
+      {
+        ScheduleItem item;
+        int dow = sch_days[k];
+
+        item.parent_index = sch_index;
+        item.index = counter;
+        item.hh = sch_hh;
+        item.mm = sch_mm;
+        item.dow = dow;
+        my_strcpy(item.target, sch_target); 
+        item.target_state = sch_target_state;
+        item.reg_timestamp = sch_timestamp;
+        item.status = 1;
+                
+        user_schedules[counter] = item; 
+        counter++;
+      }
+      
       tok = strtok_r(NULL, "|", &sav1);
   }
 
-  debugPrint(String(schedules_index) + "items");
+  Log.notice("Total of %d items collected"CR, schedules_index);
 }
 
-void loop() 
+
+
+/*
+ * Evaluate schedules
+ */
+void evaluate()
 {
-  server.handleClient();
+  if (!Rtc.IsDateTimeValid()) 
+  {
+      Log.trace("RTC lost confidence in the DateTime!"CR);
+  }
+  else
+  {
+    //dtnow = Rtc.GetDateTime();
+    //dtnow = RtcDateTime(604808986);
+    //ScheduleItem sch1  = getNearestPastSchedule(dtnow, "s1");
+    //toString(sch1);
+  }
 }
 
 
-#define countof(a) (sizeof(a) / sizeof(a[0]))
+
+/**
+ * Sort schedules list
+ */
+void sortSchedule()
+{
+    /*
+    Log.trace("Before"CR);
+    for(int i=0;i<counter;i++){
+      ScheduleItem item = user_schedules[i];
+      //toString(item);
+    }
+    */
+    
+    qsort((void *) &user_schedules, counter, sizeof(struct ScheduleItem), (compfn)compare );
+
+    /*
+    Log.trace("After"CR);
+    for(int i=0;i<counter;i++){
+      ScheduleItem item = user_schedules[i];
+      //toString(item);
+    }
+    */
+}
+
+
+/*
+ * qsort timewise sorting of schedules
+ */
+int compare(struct ScheduleItem *elem1, struct ScheduleItem *elem2)
+{
+    // check by reg timestamp
+
+    // check by dow
+
+    // check by time
+
+    if ( elem1->dow == elem2->dow)
+    {
+      if(elem1->hh == elem2->hh)
+      {
+        if(elem1->mm == elem2->mm)
+        {
+          return elem1->parent_index - elem2->parent_index;
+        }
+        else
+        {
+          return elem1->mm - elem2->mm;
+        }
+      }
+      else
+      {
+        return elem1->hh - elem2->hh;
+      }
+    }
+    else
+    {
+      return elem1->dow - elem2->dow;
+    }
+}
+
+
+/**
+ * Find nearest past schedule for a relay with respect to today
+ */
+struct ScheduleItem getNearestPastSchedule(RtcDateTime& dt, char* target)
+{
+  Log.trace("looking for nearest past schedule"CR);
+
+  ScheduleItem candidate;
+  ScheduleItem applicable_schedules[MAX_SCHEDULES] = {};
+  int i = counter;
+  int j = 0;
+
+  /*
+   * Collect valid candidate schedules
+   */
+   
+  while(i > 0)
+  {
+    ScheduleItem sch = user_schedules[i];
+
+    // collect scheudles for requested target only
+    if (strcmp(sch.target, target) == 0)
+    {      
+      if(getDayDiff(dt, sch) >= getDowDiff(dt,sch))
+      {
+        if(isPastTime(dt, sch))
+        {
+          applicable_schedules[j] = sch;
+          j++;
+        }
+      }      
+    }
+    
+    i--;
+  }
+
+   /*
+   * Sort collected schedules
+   */
+    if(j>0)
+    {
+      Log.trace("Before"CR);
+      for(int k=0;k<j;k++){
+      ScheduleItem sample = applicable_schedules[k];
+      toString(sample);
+      }
+      
+      qsort((void *) &applicable_schedules, counter, sizeof(struct ScheduleItem), (compfn)nearestPast );      
+      candidate = applicable_schedules[0];
+
+      Log.trace("After"CR);
+      for(int k=0;k<j;k++){
+      ScheduleItem sample = applicable_schedules[k];
+      toString(sample);
+      }
+    }
+    else
+    {
+      candidate.parent_index = -1;
+      candidate.hh = -1;
+      candidate.mm = -1;
+      candidate.dow = -1;
+      candidate.reg_timestamp = -1;
+      candidate.target_state = -1;
+    }
+
+    /*
+    * Clear array
+    */
+    memset(&applicable_schedules[0], 0, sizeof(applicable_schedules));
+
+
+    /*
+    * Apply best match schedule
+    */
+       
+   return candidate;
+}
+
+
+/**
+ * Compare to sort nearest past schedule
+ */
+int nearestPast(const void *a, const void *b)
+{
+  struct ScheduleItem *x = (struct ScheduleItem *)a;
+  struct ScheduleItem *y = (struct ScheduleItem *)b;
+  
+  /* cast pointers to adjacent elements to struct ScheduleItem* */
+    /*struct ScheduleItem *x = a, *y = b;*/
+
+    /* (x->time < y->time) - (x->time > y->time) - descending sort
+     * comparison avoids potential overflow
+     */
+    if (x->reg_timestamp != y->reg_timestamp)
+        return (x->reg_timestamp < y->reg_timestamp) - 
+               (x->reg_timestamp > y->reg_timestamp);
+    /* compare dow next */
+    else if (x->dow != y->dow)
+        return (x->dow < y->dow) - (x->dow > y->dow);
+    /* compare hh next */
+    else if (x->hh != y->hh)
+        return (x->hh < y->hh) - (x->hh > y->hh);
+    /* finally compare mm */
+    else
+        return (x->mm < y->mm) - (x->mm > y->mm);
+}
+
+
+/**
+ * Get absolute difference between current day of week and schedule's day of week
+ */
+int getDowDiff(RtcDateTime& dt, ScheduleItem& t2)
+{ 
+    return abs(dt.DayOfWeek() - t2.dow);
+}
+
+
+/**
+ * Get difference between current date and schedule date in `days`
+ */
+int getDayDiff(RtcDateTime& dt, ScheduleItem& t2)
+{
+  return (((dt.Epoch32Time() - t2.reg_timestamp) /60)/60)/24;
+}
+
+
+/**
+ * Check if schedule time is before current time
+ */
+boolean isPastTime(RtcDateTime& dt, ScheduleItem& t2)
+{
+  if(t2.dow < dt.DayOfWeek())
+  {
+      return true;
+  }
+  else
+  {
+      if(t2.hh < dt.Hour())
+      {
+        return true;
+      }
+      else if(t2.hh == dt.Hour())
+      {
+        if(t2.mm <= dt.Minute())
+        {
+          return true;
+        }
+      }
+  }
+  
+  return false;
+}
+
+
 
 /**
  * Print date time from RTC
@@ -636,26 +944,36 @@ void printDateTime(const RtcDateTime& dt)
             dt.Hour(),
             dt.Minute(),
             dt.Second() );
-    Serial.print(datestring);
+    Log.notice("%s"CR, datestring);
 }
 
+
+/*
+ * Writes schedule data to eeprom
+ */
 void writeSchedules()
 {
   eeAddress = EEPROM_START_ADDR;
 
   int len = conf.schedule_string.length();
   conf.schedule_string_length = len;
-  debugPrint("Wrting schedules length " + String(len));
+  Log.notice("Calculating & writing schedules data length:  length %d "CR, len);  
   EEPROM.write(eeAddress, len);
 
   eeAddress++;
-  
-  debugPrint("Wrting schedules " + conf.schedule_string);
+
+  char sch[conf.schedule_string.length() + 1];
+  conf.schedule_string.toCharArray(sch, conf.schedule_string.length());
+  Log.notice("Writing schedules data:  %s "CR, sch);
   writeEEPROM(eeAddress, len, conf.schedule_string);
   
   EEPROM.commit();
 }
 
+
+/*
+ * Writes string data to eeprom
+ */
 void writeEEPROM(int startAdr, int len, String writeString) {
   //yield();
   for (int i = 0; i < len; i++) {
@@ -665,12 +983,16 @@ void writeEEPROM(int startAdr, int len, String writeString) {
   EEPROM.write(startAdr,'\0');
 }
 
+
+/**
+ * Reads schedule data
+ */
 void readSchedules()
 {
   eeAddress = EEPROM_START_ADDR;
 
   conf.schedule_string_length = EEPROM.read(eeAddress);
-  debugPrint("reading schedules length " + String(conf.schedule_string_length));  
+  Log.notice("Schedules length is %d : "CR,  conf.schedule_string_length);  
 
   /*
   eeAddress++;
@@ -692,16 +1014,52 @@ void readEEPROM(int startAdr, int maxLength, char* dest) {
 
 
 
+/*
+ * Erases EEPROM settingby writing 0 in each byte
+ */
 void eraseSettings()
 {
-  debugPrint("Erasing eeprom...");
+  Log.notice("Erasing eeprom..."CR);
   
   for (int i = 0; i < EEPROM_MAX_LIMIT; i++)
     EEPROM.write(i, 0);
 }
 
-void debugPrint(String message) {
-  if (debug) {
-    Serial.println(message);
-  }
+
+/*
+ * Count characters
+ */
+int countChars( char* s, char c )
+{
+    return *s == '\0'
+              ? 0
+              : countChars( s + 1, c ) + (*s == c);
+}
+
+
+/*
+ * Copies one char array to another
+ */
+char *my_strcpy(char *destination, char *source)
+{
+    char *start = destination;
+ 
+    while(*source != '\0')
+    {
+        *destination = *source;
+        destination++;
+        source++;
+    }
+ 
+    *destination = '\0'; // add '\0' at the end
+    return start;
+}
+
+
+/**
+ * Schedule toString method
+ */
+void toString(ScheduleItem item)
+{
+  Log.trace("Index : %d, Hour: %d, Minute: %s, DayOfWeek: %d, Reg Timestamp: %d"CR, item.index, item.hh, item.mm, item.dow, item.reg_timestamp);
 }
