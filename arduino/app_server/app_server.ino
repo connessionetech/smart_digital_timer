@@ -7,6 +7,7 @@
 #include <ArduinoLog.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <TimeLib.h>
 
 
 #define countof(a) (sizeof(a) / sizeof(a[0]))
@@ -36,6 +37,7 @@ int schedules_index;
 boolean schedules_updated = false;
 boolean relays_dirty = false;
 boolean manual_mode = 0;
+long lastEval = 0;
 
 // Define a web server at port 80 for HTTP
 ESP8266WebServer server(80);
@@ -105,11 +107,12 @@ void loop()
   {
     readSchedules();
     collectSchedule();
+    sortSchedule();
     schedules_updated = false;
   }
 
   evaluate();
-  delay(20);
+  delay(5);
   server.handleClient();
 }
 
@@ -451,10 +454,12 @@ void getClockTime()
   RtcDateTime now = Rtc.GetDateTime();
   printDateTime(now);
   JsonObject& response = responseBuffer.createObject();
+  response["h"] = now.Hour();
+  response["i"] = now.Minute();
+  response["s"] = now.Second();
   response["dd"] = now.Day();
-  response["hh"] = now.Hour();
-  response["mm"] = now.Minute();
-  response["ss"] = now.Second();
+  response["mm"] = now.Month();
+  response["yy"] = now.Year();
   response.printTo(data);
 
   server.send(200, "application/json", data); 
@@ -645,17 +650,17 @@ void setupRTC()
         Rtc.SetIsRunning(true);
     }
 
-    RtcDateTime now = Rtc.GetDateTime();
-    if (now < compiled) 
+    dtnow = Rtc.GetDateTime();
+    if (dtnow < compiled) 
     {
         Log.notice("RTC is older than compile time!  (Updating DateTime)"CR);
         Rtc.SetDateTime(compiled);
     }
-    else if (now > compiled) 
+    else if (dtnow > compiled) 
     {
         Log.notice("RTC is newer than compile time. (this is expected)"CR);
     }
-    else if (now == compiled) 
+    else if (dtnow == compiled) 
     {
         Log.notice("RTC is the same as compile time! (not expected but all is fine)"CR);
     }
@@ -663,7 +668,21 @@ void setupRTC()
     // just clear them to your needed state
     Rtc.Enable32kHzPin(false);
     Rtc.SetSquareWavePin(DS3231SquareWavePin_ModeNone); 
+
+    setSyncProvider(syncProvider);   // the function to get the time from the RTC
+    if(timeStatus()!= timeSet) 
+    Log.notice("Unable to sync with the RTC"CR);
+    else
+    Log.notice("RTC has set the system time"CR);
 }
+
+
+time_t syncProvider()
+{
+  dtnow = Rtc.GetDateTime();
+  return dtnow.Epoch32Time();
+}
+
 
 
 /**
@@ -792,10 +811,14 @@ void evaluate()
   }
   else
   {
-    //dtnow = Rtc.GetDateTime();
-    //dtnow = RtcDateTime(604808986);
-    //ScheduleItem sch1  = getNearestPastSchedule(dtnow, "s1");
-    //toString(sch1);
+    if(millis() - lastEval > 500)
+    {
+      lastEval = millis();
+      //dtnow = Rtc.GetDateTime();
+      dtnow = RtcDateTime(604808986);
+      ScheduleItem sch1  = getNearestPastSchedule(dtnow, "s1");
+      //toString(sch1);
+    }
   }
 }
 
@@ -869,8 +892,10 @@ struct ScheduleItem getNearestPastSchedule(RtcDateTime& dt, char* target)
 {
   Log.trace("looking for nearest past schedule"CR);
 
+  const int APPLICABLE_SCHEDULES_COUNT = counter;
   ScheduleItem candidate;
-  ScheduleItem applicable_schedules[MAX_SCHEDULES] = {};
+  
+  ScheduleItem applicable_schedules[APPLICABLE_SCHEDULES_COUNT];
   int i = counter;
   int j = 0;
 
@@ -903,20 +928,24 @@ struct ScheduleItem getNearestPastSchedule(RtcDateTime& dt, char* target)
    */
     if(j>0)
     {
+      /*
       Log.trace("Before"CR);
       for(int k=0;k<j;k++){
       ScheduleItem sample = applicable_schedules[k];
       toString(sample);
       }
+      */
       
       qsort((void *) &applicable_schedules, counter, sizeof(struct ScheduleItem), (compfn)nearestPast );      
       candidate = applicable_schedules[0];
 
+      /*
       Log.trace("After"CR);
       for(int k=0;k<j;k++){
       ScheduleItem sample = applicable_schedules[k];
       toString(sample);
       }
+      */
     }
     else
     {
