@@ -33,7 +33,9 @@ char *password = "12345678";
 
 int eeAddress = 0;
 int schedules_index;
-boolean schedules_dirty = false;
+boolean schedules_updated = false;
+boolean relays_dirty = false;
+boolean manual_mode = 0;
 
 // Define a web server at port 80 for HTTP
 ESP8266WebServer server(80);
@@ -41,10 +43,10 @@ RtcDateTime dtnow;
 
 struct Settings {
    const int r1_id = 1;
-   int r1;
+   int r1_state;
    long r1_updated;
    const int r2_id = 2;
-   int r2;
+   int r2_state;
    long r2_updated;
 };
 
@@ -93,13 +95,17 @@ void setup()
 
 void loop() 
 {
-  if(schedules_dirty)
+  if(relays_dirty)
+  {
+    writeRelays();
+    relays_dirty = false;
+  }
+  
+  if(schedules_updated)
   {
     readSchedules();
     collectSchedule();
-    //sortSchedule();
-
-    schedules_dirty = false;
+    schedules_updated = false;
   }
 
   evaluate();
@@ -118,6 +124,7 @@ void setupEeprom()
   // Check if the EEPROM contains valid data from another run
   // If so, overwrite the 'default' values set up in our struct
   if(EEPROM.percentUsed()>=0) {
+    readRelays();
     readSchedules(); 
   }
 }
@@ -181,7 +188,8 @@ void setupWebServer()
   server.on ( "/switch/1/set", HTTP_POST, toggleSwitchA );
   server.on ( "/switch/1/get", HTTP_GET, readSwitchA ); 
   server.on ( "/switch/2/set", HTTP_POST, toggleSwitchB );
-  server.on ( "/switch/2/get", HTTP_GET, readSwitchB );  
+  server.on ( "/switch/2/get", HTTP_GET, readSwitchB ); 
+  server.on ( "/switch/get", HTTP_GET, readAllSwitches ); 
   server.on ( "/", handleRoot );
   server.onNotFound ( handleNotFound );
   
@@ -216,7 +224,7 @@ void readSwitchA()
   RtcDateTime now = Rtc.GetDateTime();
   JsonObject& response = responseBuffer.createObject();
   response["id"] = conf.r1_id;
-  response["state"] = conf.r1;
+  response["state"] = conf.r1_state;
   response["lastupdate"] = conf.r1_updated;
   response.printTo(data);
 
@@ -229,23 +237,25 @@ void readSwitchA()
 void toggleSwitchA()
 {
   String data;
+  dtnow = Rtc.GetDateTime();
   
-  if(conf.r1 == 0)
+  if(conf.r1_state == 0)
   {
-    conf.r1=1;
-    //digitalWrite(RELAY1, LOW);
+    conf.r1_state=1;
+    conf.r1_updated = dtnow.Epoch32Time();
+    relays_dirty = true;
   }
   else
   {
-    conf.r1=0;
-    //digitalWrite(RELAY1, HIGH);
+    conf.r1_state=0;
+    conf.r1_updated = dtnow.Epoch32Time();
+    relays_dirty = true;
   }
 
-  StaticJsonBuffer<100> responseBuffer;
-  RtcDateTime now = Rtc.GetDateTime();
+  StaticJsonBuffer<100> responseBuffer;  
   JsonObject& response = responseBuffer.createObject();
   response["id"] = conf.r1_id;
-  response["state"] = conf.r1;
+  response["state"] = conf.r1_state;
   response["lastupdate"] = conf.r1_updated;
   response.printTo(data);
   
@@ -261,7 +271,7 @@ void readSwitchB()
   RtcDateTime now = Rtc.GetDateTime();
   JsonObject& root = jsonBuffer.createObject();
   root["id"] = conf.r2_id;
-  root["state"] = conf.r2;
+  root["state"] = conf.r2_state;
   root["lastupdate"] = conf.r2_updated;
 
   String data;
@@ -275,29 +285,63 @@ void readSwitchB()
  */
 void toggleSwitchB()
 {
-  if(conf.r2 == 0)
+  String data;
+  dtnow = Rtc.GetDateTime();
+  
+  if(conf.r2_state == 0)
   {
-    conf.r2=1;
-    //digitalWrite(RELAY2, LOW);
+    conf.r2_state=1;
+    conf.r2_updated = dtnow.Epoch32Time();
+    relays_dirty = true;
   }
   else
   {
-    conf.r2=0;
-    //digitalWrite(RELAY2, HIGH);
+    conf.r2_state=0;
+    conf.r2_updated = dtnow.Epoch32Time();
+    relays_dirty = true;
   }
 
   StaticJsonBuffer<100> jsonBuffer;
-  RtcDateTime now = Rtc.GetDateTime();
   JsonObject& root = jsonBuffer.createObject();
   root["id"] = conf.r2_id;
-  root["state"] = conf.r2;
+  root["state"] = conf.r2_state;
   root["lastupdate"] = conf.r2_updated;
-
-  String data;
+  
   root.printTo(data);
 
   server.send(200, "application/json", data);
 }
+
+
+/**
+ * Reads all switches
+ */
+void readAllSwitches()
+{
+  DynamicJsonBuffer responseBuffer;
+  
+  JsonObject& response = responseBuffer.createObject();
+  response["status"] = "success";
+  
+  JsonArray& items = response.createNestedArray("data");
+
+  JsonObject& item1 = items.createNestedObject();
+  item1["id"] = conf.r1_id;
+  item1["state"] = conf.r1_state;
+  item1["lastupdate"] = conf.r1_updated;
+
+  JsonObject& item2 = items.createNestedObject();
+  item2["id"] = conf.r2_id;
+  item2["state"] = conf.r2_state;
+  item2["lastupdate"] = conf.r2_updated;
+
+  String data;
+  response.printTo(data);
+
+  server.send(200, "application/json", data);
+}
+
+
 
 /**
  * Read alarm schedules
@@ -434,7 +478,7 @@ void clearSchedules()
     dat.strlength = 0;
     writeSchedules();
     Log.notice("All EEPROM data wiped"CR);
-    schedules_dirty = true;
+    schedules_updated = true;
   } else {
     Log.notice("EEPROM data could not be wiped from flash store"CR);
   } 
@@ -994,6 +1038,7 @@ void printDateTime(const RtcDateTime& dt)
 }
 
 
+
 /*
  * Writes schedule data to eeprom
  */
@@ -1006,7 +1051,7 @@ void writeSchedules()
 
   if(ok){
     Log.notice("Commit OK"CR);
-    schedules_dirty = true;
+    schedules_updated = true;
   }else{
     Log.notice("Commit failed"CR);
   }
@@ -1021,6 +1066,34 @@ void readSchedules()
   Log.notice("Reading schedules data."CR);
   EEPROM.get(SCHEDULES_START_ADDR, dat);
   Log.notice("schedules data. %s"CR, dat.str);
+}
+
+
+/**
+ * Save relay states
+ */
+void writeRelays()
+{
+  Log.notice("Writing relay states."CR); 
+  
+  EEPROM.put(EEPROM_START_ADDR, conf);
+  boolean ok = EEPROM.commit();
+
+  if(ok){
+    Log.notice("Commit OK"CR);
+  }else{
+    Log.notice("Commit failed"CR);
+  }
+}
+
+
+/**
+ * Reads schedule data
+ */
+void readRelays()
+{
+  Log.notice("Reading relays data."CR);
+  EEPROM.get(EEPROM_START_ADDR, conf);
 }
 
 
